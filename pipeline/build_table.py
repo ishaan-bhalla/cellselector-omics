@@ -11,41 +11,50 @@ table = table.rename(columns={
 })
 table["in_depmap"] = True
 
-# ---- Source 2: HPA ----
+# ---- Source 2: HPA (presence + name) ----
 print("Loading HPA...")
 hpa = pd.read_csv("data/11_hpa_rna_celline_description.tsv", sep="\t", low_memory=False)
-table["in_hpa"] = table["cellosaurus_id"].isin(set(hpa["Cellosaurus ID"].dropna()))
+hpa_names = hpa[["Cellosaurus ID","Cell line"]].dropna(subset=["Cellosaurus ID"])
+hpa_names = hpa_names.rename(columns={"Cellosaurus ID":"cellosaurus_id","Cell line":"hpa_name"})
+hpa_names = hpa_names.drop_duplicates("cellosaurus_id")
+table["in_hpa"] = table["cellosaurus_id"].isin(set(hpa_names["cellosaurus_id"]))
+table = table.merge(hpa_names, on="cellosaurus_id", how="left")
 
-# ---- Source 3: GEO ----
+# ---- Source 3: GEO (presence + name) ----
 print("Loading GEO...")
 geo = pd.read_csv("data/10_GEOInfo.txt", sep="\t", low_memory=False)
-table["in_geo"] = table["cellosaurus_id"].isin(set(geo["Cellosaurus_ID"].dropna()))
+geo_names = geo[["Cellosaurus_ID","cell_line"]].dropna(subset=["Cellosaurus_ID"])
+geo_names = geo_names.rename(columns={"Cellosaurus_ID":"cellosaurus_id","cell_line":"geo_name"})
+geo_names = geo_names.drop_duplicates("cellosaurus_id")
+table["in_geo"] = table["cellosaurus_id"].isin(set(geo_names["cellosaurus_id"]))
+table = table.merge(geo_names, on="cellosaurus_id", how="left")
 
 # ---- Evidence count ----
 table["evidence_count"] = table[["in_depmap","in_hpa","in_geo"]].sum(axis=1)
 
-# ---- Add official names and synonyms from Cellosaurus ----
-print("Loading Cellosaurus for official names...")
+# ---- Official name from Cellosaurus ----
+print("Loading Cellosaurus...")
 cello = pd.read_csv("data/7_cellosaurus.csv", low_memory=False)
-cello_small = cello[["Accession (CVCL_xxxx)","Identifier (cell line name)","Synonyms"]].rename(columns={
+cs = cello[["Accession (CVCL_xxxx)","Identifier (cell line name)","Synonyms"]]
+cs = cs.rename(columns={
     "Accession (CVCL_xxxx)":"cellosaurus_id",
     "Identifier (cell line name)":"official_name",
     "Synonyms":"synonyms",
 })
-table = table.merge(cello_small, on="cellosaurus_id", how="left")
+table = table.merge(cs, on="cellosaurus_id", how="left")
 
-# ---- Split matched vs unmatched (honest tracking) ----
+# ---- Split matched vs unmatched ----
 matched = table[table["cellosaurus_id"].notna()].copy()
 unmatched = table[table["cellosaurus_id"].isna()].copy()
 
-print("\nMatched cell lines:", len(matched))
-print("Unmatched cell lines:", len(unmatched))
+print("\nMatched:", len(matched), " Unmatched:", len(unmatched))
 
-# ---- Save both ----
+# ---- Save ----
 matched.to_parquet("outputs/cell_line_lookup.parquet")
 unmatched.to_csv("outputs/unmatched_cells.csv", index=False)
-print("\nSaved matched table to outputs/cell_line_lookup.parquet")
-print("Saved unmatched list to outputs/unmatched_cells.csv")
+print("Saved lookup table and unmatched list to outputs/")
 
-print("\nSample of the matched table:")
-print(matched[["cellosaurus_id","official_name","depmap_name","disease","evidence_count"]].head(6).to_string())
+# ---- Show all names side by side for cells in all 3 sources ----
+print("\nSame cell, every name it goes by:")
+demo = matched[matched["evidence_count"]==3][["official_name","depmap_name","hpa_name","geo_name"]].head(6)
+print(demo.to_string())
