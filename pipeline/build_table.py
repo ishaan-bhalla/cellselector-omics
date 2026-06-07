@@ -58,3 +58,28 @@ print("Saved lookup table and unmatched list to outputs/")
 print("\nSame cell, every name it goes by:")
 demo = matched[matched["evidence_count"]==3][["official_name","depmap_name","hpa_name","geo_name"]].head(6)
 print(demo.to_string())
+
+# ---- File 8: what data types exist per cell (RNA / WES / WGS) ----
+print("Loading OmicsProfiles (file 8)...")
+prof = pd.read_csv("data/8_DepMap_OmicsProfiles.csv", low_memory=False)
+prof["has"] = True
+datatypes = prof.pivot_table(index="ModelID", columns="Datatype", values="has", aggfunc="any", fill_value=False)
+datatypes = datatypes.reset_index().rename(columns={
+    "ModelID":"DepMap_ID",
+    "rna":"has_rna",
+    "wes":"has_wes",
+    "wgs":"has_wgs",
+})
+
+# Merge this into the matched table
+matched = matched.merge(datatypes, on="DepMap_ID", how="left")
+
+# Count how many data types each cell has
+matched["datatype_count"] = matched[["has_rna","has_wes","has_wgs"]].sum(axis=1)
+
+# Save the updated table
+matched.to_parquet("outputs/cell_line_lookup.parquet")
+print("Added data-type info. Updated table saved.")
+
+print("\nData types per cell:")
+print(matched["datatype_count"].value_counts().sort_index().to_string())
