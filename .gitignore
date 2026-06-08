@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Project data files (keep local, never push)
+data/
+outputs/
+*.csv
+*.tsv
+*.txt
+*.parquet
+*.gct
+*.gctx
+*.pkl
+*.xlsx
