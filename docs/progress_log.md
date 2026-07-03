@@ -44,3 +44,22 @@
 - Missing: 1,308,704 total
 - Column name hints: UniProt accession (possible 'UPID (GENE)' format)
 - Value hints: Unnamed: 0: DepMap ACH- cell line
+
+---
+
+## OPEN ITEMS — to resolve after preprocessing complete
+
+1. **GEO units unknown** — `units = "unknown_expression"` is a placeholder.
+   Check the GEO series record for the source experiments to confirm whether
+   values are TPM, RPKM, raw counts, or another normalisation.
+   Values in sample (e.g. 33.6, 553.2) suggest RPKM/CPM rather than raw counts
+   or TPM, but must be confirmed from series metadata.
+
+2. **GEO gene_symbol all NaN** — no symbol column exists in file 3.
+   Backfill from HPA `Gene name` column (ENSG → HGNC mapping already present
+   in `gene_expr_hpa_preprocessed.parquet`) or from Ensembl BioMart after merge.
+
+3. **File 2 PR- IDs need resolution** — `original_id` values are DepMap OmicsProfile
+   IDs (`PR-XXXXXX`), not cell line IDs. Requires `data/8_DepMap_OmicsProfiles.csv`
+   (currently absent) to map `PR-` → `ACH-` (ModelID) → `cellosaurus_id` before
+   file 2 output can be joined to the nomenclature spine.
