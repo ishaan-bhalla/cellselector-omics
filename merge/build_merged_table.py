@@ -12,10 +12,9 @@ master = pd.read_parquet("outputs/cell_line_lookup.parquet")
 master = master[["cellosaurus_id", "DepMap_ID", "official_name", "evidence_count"]].copy()
 
 # ---- ID translation maps (from DepMap sample info) ----
-samp = pd.read_csv("data/9_DepMap_sample_info.csv", low_memory=False)
+samp = pd.read_csv("data/nomenclature/9_DepMap_sample_info.csv", low_memory=False)
 dep_to_cvcl = dict(zip(samp["DepMap_ID"], samp["RRID"]))
 ccle_to_cvcl = dict(zip(samp["CCLE_Name"], samp["RRID"]))
-
 # ============================================================
 # MEMBER 4 - non gene expression
 # ============================================================
@@ -38,9 +37,26 @@ mir_cvcls = {ccle_to_cvcl.get(c) for c in mir.columns if c != "miRNA"}
 master["has_mirna"] = master["cellosaurus_id"].isin(mir_cvcls)
 
 # ============================================================
-# MEMBER 2 - gene expression   (add when their data arrives)
+# MEMBER 2 - gene expression (all four files)
 # ============================================================
+print("Merging Member 2 (gene expression)...")
+pq = "outputs/parquet/"
 
+# proteomics: original_id = ACH ids -> map via dep_to_cvcl
+prot = pd.read_parquet(pq+"gene_expr_ccle_proteomics_preprocessed.parquet", columns=["original_id"])
+prot_cells = set(prot["original_id"].dropna().map(dep_to_cvcl).dropna())
+master["has_proteomics"] = master["cellosaurus_id"].isin(prot_cells)
+
+# HPA: original_id = free-text names -> map via hpa_name in the lookup
+hpa_out = pd.read_parquet(pq+"gene_expr_hpa_preprocessed.parquet", columns=["original_id"])
+hpa_lookup = pd.read_parquet("outputs/cell_line_lookup.parquet")[["cellosaurus_id","hpa_name"]].dropna()
+hpa_name_to_cvcl = dict(zip(hpa_lookup["hpa_name"], hpa_lookup["cellosaurus_id"]))
+hpa_cells = set(hpa_out["original_id"].dropna().map(hpa_name_to_cvcl).dropna())
+master["has_hpa_expr"] = master["cellosaurus_id"].isin(hpa_cells)
+
+# DepMap: already has cellosaurus_id column -> use directly
+dep_out = pd.read_parquet(pq+"gene_expr_depmap_preprocessed.parquet", columns=["cellosaurus_id"])
+master["has_depmap_expr"] = master["cellosaurus_id"].isin(set(dep_out["cellosaurus_id"].dropna()))
 # ============================================================
 # MEMBER 3 - gene properties   (add when their data arrives)
 # ============================================================
