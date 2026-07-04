@@ -57,6 +57,13 @@ master["has_hpa_expr"] = master["cellosaurus_id"].isin(hpa_cells)
 # DepMap: already has cellosaurus_id column -> use directly
 dep_out = pd.read_parquet(pq+"gene_expr_depmap_preprocessed.parquet", columns=["cellosaurus_id"])
 master["has_depmap_expr"] = master["cellosaurus_id"].isin(set(dep_out["cellosaurus_id"].dropna()))
+
+# GEO: original_id = GSM codes -> map via GEO info (Geo_accession -> Cellosaurus_ID)
+geo_info = pd.read_csv("data/nomenclature/10_GEOInfo.txt", sep="\t", low_memory=False)
+gsm_to_cvcl = dict(zip(geo_info["Geo_accession"], geo_info["Cellosaurus_ID"]))
+geo_out = pd.read_parquet(pq+"gene_expr_geo_preprocessed.parquet", columns=["original_id"])
+geo_cells = set(geo_out["original_id"].dropna().map(gsm_to_cvcl).dropna())
+master["has_geo_expr"] = master["cellosaurus_id"].isin(geo_cells)
 # ============================================================
 # MEMBER 3 - gene properties   (add when their data arrives)
 # ============================================================
