@@ -68,14 +68,24 @@ def preprocess_file3() -> pd.DataFrame:
 
     unique_gsm = df.index.tolist()         # GSM accessions
 
+    # ── Step 3b: build ENSG → gene_symbol lookup from HPA preprocessed parquet ─
+    print("Building ENSG → gene_symbol lookup from HPA parquet …")
+    hpa_path = PARQUET_DIR / "gene_expr_hpa_preprocessed.parquet"
+    hpa_sym  = pd.read_parquet(hpa_path, columns=["gene_id", "gene_symbol"])
+    hpa_sym  = hpa_sym.drop_duplicates("gene_id").dropna(subset=["gene_symbol"])
+    ensg_to_symbol: dict[str, str] = dict(zip(hpa_sym["gene_id"], hpa_sym["gene_symbol"]))
+    print(f"  {len(ensg_to_symbol):,} ENSG → symbol pairs loaded from HPA")
+
     # ── Step 4: chunk-melt → stream to Parquet ───────────────────────────────
     # Process MELT_CHUNK GSM rows at a time to keep melt output manageable
     # (200 × 19,914 ≈ 4M rows per chunk).
     print(f"\nMelting in chunks of {MELT_CHUNK} GSM rows, streaming to Parquet …")
 
-    writer   = None
-    rows_out = 0
-    n_chunks = 0
+    writer         = None
+    rows_out       = 0
+    n_chunks       = 0
+    symbols_filled = 0
+    symbols_nan    = 0
 
     for start in range(0, tr_rows, MELT_CHUNK):
         end   = min(start + MELT_CHUNK, tr_rows)
@@ -92,11 +102,14 @@ def preprocess_file3() -> pd.DataFrame:
 
         # Categorical columns → dictionary encoding in Parquet (tiny footprint)
         n = len(long)
-        long["original_id_type"] = pd.Categorical(["GSM"] * n,                  categories=["GSM"])
-        long["gene_symbol"]      = np.nan                                        # no symbol in this file
-        long["source"]           = pd.Categorical(["GEO_expression"] * n,       categories=["GEO_expression"])
-        long["units"]            = pd.Categorical(["unknown_expression"] * n,    categories=["unknown_expression"])
-        long["date_processed"]   = pd.Categorical([today] * n,                  categories=[today])
+        long["original_id_type"] = pd.Categorical(["GSM"] * n,               categories=["GSM"])
+        long["gene_symbol"]      = long["gene_id"].map(ensg_to_symbol)        # backfilled from HPA
+        long["source"]           = pd.Categorical(["GEO_expression"] * n,    categories=["GEO_expression"])
+        long["units"]            = pd.Categorical(["unknown_expression"] * n, categories=["unknown_expression"])
+        long["date_processed"]   = pd.Categorical([today] * n,                categories=[today])
+
+        symbols_filled += int(long["gene_symbol"].notna().sum())
+        symbols_nan    += int(long["gene_symbol"].isna().sum())
 
         long = long[STANDARD_COLS]
         rows_out += len(long)
@@ -127,6 +140,8 @@ def preprocess_file3() -> pd.DataFrame:
     print(f"Unique genes               : {len(unique_genes):,}")
     print(f"Expected row count         : {expected:,}  (19,914 × 3,267)")
     print(f"Actual row count           : {rows_out:,}")
+    print(f"Gene symbols filled        : {symbols_filled:,} / {rows_out:,} ({100*symbols_filled/rows_out:.1f}%)")
+    print(f"Gene symbols remaining NaN : {symbols_nan:,} ({100*symbols_nan/rows_out:.1f}%)")
     print(f"Final shape                : {rows_out:,} rows × 8 columns")
     print(f"Parquet size on disk       : {parquet_mb:.1f} MB")
     print(f"Time taken                 : {elapsed:.1f}s")
