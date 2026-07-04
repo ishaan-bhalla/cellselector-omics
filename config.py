@@ -12,6 +12,15 @@ PARQUET_DIR = OUTPUTS_DIR / "parquet"
 FIGURES_DIR = PROJECT_ROOT / "figures"
 DOCS_DIR = PROJECT_ROOT / "docs"
 
+# ── Nomenclature / spine sources ──────────────────────────────────────────────
+NOMENCLATURE_DIR  = DATA_DIR / "nomenclature"
+SAMPLE_INFO       = NOMENCLATURE_DIR / "9_DepMap_sample_info.csv"
+HPA_DESC          = NOMENCLATURE_DIR / "11_hpa_rna_celline_description.tsv"
+GEO_INFO          = NOMENCLATURE_DIR / "10_GEOInfo.txt"
+CELLOSAURUS       = NOMENCLATURE_DIR / "7_cellosaurus.csv"
+OMICS_PROFILES    = NOMENCLATURE_DIR / "8_DepMap_OmicsProfiles.csv"
+CELL_LINE_LOOKUP  = OUTPUTS_DIR / "cell_line_lookup.parquet"
+
 FILES = {
     "hpa":      GENE_EXPR_DIR / "1_4_hpa_rna_celline.tsv",
     "depmap":   GENE_EXPR_DIR / "2_DepMap_OmicsExpressionAllGenesTPMLogp1Profile.csv",
