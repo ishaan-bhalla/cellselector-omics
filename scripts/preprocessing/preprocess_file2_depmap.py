@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from config import FILES, PARQUET_DIR, setup_dirs
+from config import FILES, OMICS_PROFILES, PARQUET_DIR, SAMPLE_INFO, setup_dirs
 
 OUTPUT_NAME = "gene_expr_depmap_preprocessed.parquet"
 COL_CHUNK   = 2000   # gene columns loaded per CSV pass
@@ -24,6 +24,7 @@ STANDARD_COLS = [
     "source",
     "units",
     "date_processed",
+    "cellosaurus_id",
 ]
 
 # Pattern A: "TSPAN6 (ENSG00000000003)"  → symbol + ENSG
@@ -91,6 +92,20 @@ def preprocess_file2() -> pd.DataFrame:
     print(f"Gene columns: {n_genes:,}")
     print(f"Col chunks  : {n_chunks}  ({COL_CHUNK} gene cols each)")
 
+    # ── Step 1b: build PR- → ACH- → CVCL_ translation maps ──────────────────
+    print("\nBuilding PR- → ACH- → CVCL_ translation maps …")
+    prof_df = pd.read_csv(OMICS_PROFILES, usecols=["ProfileID", "ModelID"], low_memory=False)
+    print(f"  OmicsProfiles columns confirmed: {['ProfileID', 'ModelID']}")
+    pr_to_ach = dict(zip(prof_df["ProfileID"], prof_df["ModelID"]))
+
+    samp_df = pd.read_csv(SAMPLE_INFO, usecols=["DepMap_ID", "RRID"], low_memory=False)
+    dep_to_cvcl = {row.DepMap_ID: row.RRID for row in samp_df.itertuples() if pd.notna(row.RRID)}
+
+    # Pre-chain: PR- → CVCL_ directly (None where either step fails)
+    pr_to_cvcl: dict[str, str | None] = {
+        pr: dep_to_cvcl.get(ach) for pr, ach in pr_to_ach.items()
+    }
+
     # ── Step 2: pre-parse all column names in one pass (pure string ops) ──────
     gene_id_map, symbol_map, counts, failed_cols = parse_gene_columns(gene_cols)
 
@@ -138,6 +153,7 @@ def preprocess_file2() -> pd.DataFrame:
         long["source"]           = pd.Categorical(["DepMap_TPM"] * n,  categories=["DepMap_TPM"])
         long["units"]            = pd.Categorical(["TPM_log1p"] * n,    categories=["TPM_log1p"])
         long["date_processed"]   = pd.Categorical([today] * n,          categories=[today])
+        long["cellosaurus_id"]   = long["original_id"].map(pr_to_cvcl)
 
         long = long[STANDARD_COLS]
         rows_out += n
@@ -164,6 +180,12 @@ def preprocess_file2() -> pd.DataFrame:
     parquet_mb = out_path.stat().st_size / 1_048_576
     expected   = len(unique_pr_ids) * n_genes
 
+    # Mapping stats computed from the unique PR- IDs seen in the first chunk
+    pr_to_ach_hits  = sum(1 for pr in unique_pr_ids if pr in pr_to_ach)
+    ach_to_cvcl_hits = sum(1 for pr in unique_pr_ids if pr_to_cvcl.get(pr) is not None)
+    pr_no_ach       = len(unique_pr_ids) - pr_to_ach_hits
+    ach_no_cvcl     = pr_to_ach_hits - ach_to_cvcl_hits
+
     sample = pd.read_parquet(out_path).head(5)
 
     print(f"\n{'─'*66}")
@@ -173,9 +195,13 @@ def preprocess_file2() -> pd.DataFrame:
     print(f"Pattern C (failed)       : {counts['C']:,}")
     print(f"Column chunks processed  : {n_chunks}")
     print(f"Unique PR- profiles      : {len(unique_pr_ids):,}")
+    print(f"PR- → ACH- mapped        : {pr_to_ach_hits:,} / {len(unique_pr_ids):,}"
+          + (f"  ({pr_no_ach} failed)" if pr_no_ach else "  (all mapped)"))
+    print(f"ACH- → CVCL_ mapped      : {ach_to_cvcl_hits:,} / {pr_to_ach_hits:,}"
+          + (f"  ({ach_no_cvcl} failed)" if ach_no_cvcl else "  (all mapped)"))
     print(f"Expected row count       : {expected:,}  (1,495 × {n_genes:,})")
     print(f"Actual row count         : {rows_out:,}")
-    print(f"Final shape              : {rows_out:,} rows × 8 columns")
+    print(f"Final shape              : {rows_out:,} rows × 9 columns")
     print(f"Parquet size on disk     : {parquet_mb:.1f} MB")
     print(f"Time taken               : {elapsed:.1f}s")
     print(f"\nColumn order: {STANDARD_COLS}")

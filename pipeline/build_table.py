@@ -1,10 +1,23 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import (
+    CELLOSAURUS,
+    CELL_LINE_LOOKUP,
+    GEO_INFO,
+    HPA_DESC,
+    OMICS_PROFILES,
+    SAMPLE_INFO,
+)
+
 print("Loading all sources...")
-samp = pd.read_csv("data/9_DepMap_sample_info.csv", low_memory=False)
-hpa = pd.read_csv("data/11_hpa_rna_celline_description.tsv", sep="\t", low_memory=False)
-geo = pd.read_csv("data/10_GEOInfo.txt", sep="\t", low_memory=False)
-cello = pd.read_csv("data/7_cellosaurus.csv", low_memory=False)
+samp  = pd.read_csv(SAMPLE_INFO,  low_memory=False)
+hpa   = pd.read_csv(HPA_DESC,     sep="\t", low_memory=False)
+geo   = pd.read_csv(GEO_INFO,     sep="\t", low_memory=False)
+cello = pd.read_csv(CELLOSAURUS,  low_memory=False)
 
 # ---- Collect every cell line ID from all three sources ----
 depmap_ids = set(samp["RRID"].dropna())
@@ -49,7 +62,7 @@ m["is_human"] = m["species"].astype(str).str.contains("Homo sapiens", na=False)
 
 # ---- Add data-type map from file 8 ----
 print("Loading OmicsProfiles (file 8)...")
-prof = pd.read_csv("data/8_DepMap_OmicsProfiles.csv", low_memory=False)
+prof = pd.read_csv(OMICS_PROFILES, low_memory=False)
 prof["has"] = True
 datatypes = prof.pivot_table(index="ModelID", columns="Datatype", values="has", aggfunc="any", fill_value=False)
 datatypes = datatypes.reset_index().rename(columns={"ModelID":"DepMap_ID","rna":"has_rna","wes":"has_wes","wgs":"has_wgs"})
@@ -57,7 +70,7 @@ m = m.merge(datatypes, on="DepMap_ID", how="left")
 m["datatype_count"] = m[["has_rna","has_wes","has_wgs"]].sum(axis=1)
 
 # ---- Save ----
-m.to_parquet("outputs/cell_line_lookup.parquet")
+m.to_parquet(CELL_LINE_LOOKUP)
 print("\nFinal table:", m.shape[0], "cell lines,", m.shape[1], "columns")
 print("Matched to Cellosaurus:", m["official_name"].notna().sum())
 print("Human cell lines:", m["is_human"].sum())
