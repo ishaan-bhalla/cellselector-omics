@@ -65,9 +65,19 @@ geo_out = pd.read_parquet(pq+"gene_expr_geo_preprocessed.parquet", columns=["ori
 geo_cells = set(geo_out["original_id"].dropna().map(gsm_to_cvcl).dropna())
 master["has_geo_expr"] = master["cellosaurus_id"].isin(geo_cells)
 # ============================================================
-# MEMBER 3 - gene properties   (add when their data arrives)
+# MEMBER 3 - gene properties (mutations + fusions)
 # ============================================================
+print("Merging Member 3 (gene properties)...")
 
+# mutations: ModelID = ACH ids -> map via dep_to_cvcl
+mut = pd.read_csv("data/member3/mutation_gene_features.csv", low_memory=False, usecols=["ModelID"])
+mut_cells = set(mut["ModelID"].dropna().map(dep_to_cvcl).dropna())
+master["has_mutations"] = master["cellosaurus_id"].isin(mut_cells)
+
+# fusions: ModelID = ACH ids -> map via dep_to_cvcl
+fus = pd.read_csv("data/member3/fusion_gene_features.csv", low_memory=False, usecols=["ModelID"])
+fus_cells = set(fus["ModelID"].dropna().map(dep_to_cvcl).dropna())
+master["has_fusions"] = master["cellosaurus_id"].isin(fus_cells)
 # ---- Save the merged master table ----
 master.to_parquet("outputs/master_merged.parquet")
 
