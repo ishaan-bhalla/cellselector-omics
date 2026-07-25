@@ -29,6 +29,12 @@ def _score_source(path, gene, id_map, id_col="original_id"):
     return per.groupby("cellosaurus_id")["score"].max().reset_index()
 
 
+def make_reason(gene, es, ns, cf):
+    strength = "very strongly" if es>=0.7 else "strongly" if es>=0.4 else "moderately" if es>=0.2 else "weakly"
+    conf_word = "high confidence" if cf>=0.8 else "moderate confidence" if cf>=0.5 else "lower confidence"
+    return f"Expresses {gene} {strength}, backed by {int(ns)} dataset(s) ({conf_word})."
+
+
 def recommend(gene, top_n=10):
     parts = []
     h = _score_source(PQ+"gene_expr_hpa_preprocessed.parquet", gene, hpa_to_id)
@@ -48,14 +54,17 @@ def recommend(gene, top_n=10):
     combined["n_sources"] = combined[score_cols].notna().sum(axis=1)
     result = combined.merge(CONF, on="cellosaurus_id", how="left")
     result["final_score"] = result["expr_score"] * result["confidence"]
-    result = result.sort_values("final_score", ascending=False)
-    return result[["official_name","expr_score","n_sources","confidence","final_score"]].head(top_n)
+    result = result.sort_values("final_score", ascending=False).head(top_n)
+    result["reason"] = result.apply(lambda r: make_reason(gene, r["expr_score"], r["n_sources"], r["confidence"]), axis=1)
+    return result[["official_name","final_score","reason"]]
 
 
 if __name__ == "__main__":
-    for gene in ["TP53","EGFR"]:
-        print("\n" + "="*55)
+    for gene in ["EGFR"]:
+        print("\n" + "="*70)
         print("Top cell lines for", gene)
         r = recommend(gene)
         if r is not None:
-            print(r.to_string(index=False))
+            for _, row in r.iterrows():
+                print(f"\n{row['official_name']}  (score {row['final_score']:.2f})")
+                print(f"   {row['reason']}")
