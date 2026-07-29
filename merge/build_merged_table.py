@@ -69,9 +69,18 @@ master["has_geo_expr"] = master["cellosaurus_id"].isin(geo_cells)
 # ============================================================
 print("Merging Member 3 (gene properties)...")
 
-# mutations: ModelID = ACH ids -> map via dep_to_cvcl
-mut = pd.read_csv("data/member3/mutation_gene_features.csv", low_memory=False, usecols=["ModelID"])
-mut_cells = set(mut["ModelID"].dropna().map(dep_to_cvcl).dropna())
+# mutations: ProfileID = PR- ids -> chain PR- → ACH- → CVCL_
+prof_df = pd.read_csv("data/nomenclature/8_DepMap_OmicsProfiles.csv",
+                      usecols=["ProfileID", "ModelID"], low_memory=False)
+pr_to_ach = dict(zip(prof_df["ProfileID"], prof_df["ModelID"]))
+mut = pd.read_csv("data/member3/mutation_gene_features.csv", low_memory=False, usecols=["ProfileID"])
+mut_cells = set(
+    mut["ProfileID"].dropna()
+                    .map(pr_to_ach)      # PR- → ACH-
+                    .dropna()
+                    .map(dep_to_cvcl)    # ACH- → CVCL_
+                    .dropna()
+)
 master["has_mutations"] = master["cellosaurus_id"].isin(mut_cells)
 
 # fusions: ModelID = ACH ids -> map via dep_to_cvcl
