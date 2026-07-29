@@ -13,21 +13,25 @@ from config import (
     SAMPLE_INFO,
 )
 
+FIXED_WEIGHTS = {
+    "rna":     0.50,
+    "protein": 0.10,
+    "quality": 0.25,
+    "context": 0.15,
+}
+
+# GEO confirmation bonus/penalty — additive, not part of weighted sum
+GEO_BONUS   = +0.10
+GEO_PENALTY = -0.10
+
 
 def load_mappings() -> tuple[dict, dict, dict]:
-    """Load all ID translation dicts.
-
-    Returns: (hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl)
-    """
+    """Return (hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl)."""
     lkp = pd.read_parquet(CELL_LINE_LOOKUP, columns=["cellosaurus_id", "hpa_name"])
     hpa_to_cvcl = dict(zip(lkp["hpa_name"].dropna(), lkp["cellosaurus_id"].dropna()))
 
     samp = pd.read_csv(SAMPLE_INFO, usecols=["DepMap_ID", "RRID"], low_memory=False)
-    ach_to_cvcl = {
-        row.DepMap_ID: row.RRID
-        for row in samp.itertuples()
-        if pd.notna(row.RRID)
-    }
+    ach_to_cvcl = {r.DepMap_ID: r.RRID for r in samp.itertuples() if pd.notna(r.RRID)}
 
     geo = pd.read_csv(
         GEO_INFO, sep="\t",
@@ -45,15 +49,34 @@ def _pct_rank(series: pd.Series) -> np.ndarray:
     return series.rank(pct=True, method="average").values
 
 
-def score_rna_expression(gene: str, hpa_to_cvcl: dict, gsm_to_cvcl: dict) -> pd.DataFrame:
-    """Score RNA expression from HPA, DepMap, and GEO for a given gene.
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIMARY RNA SCORING  (HPA + DepMap)
+# GEO is computed separately and returned as a ±0.10 confirmation signal
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Columns: cellosaurus_id, rna_score, n_rna_sources,
-             hpa_score, depmap_score, geo_score
+def score_rna_expression(
+    gene: str,
+    hpa_to_cvcl: dict,
+    gsm_to_cvcl: dict,
+) -> pd.DataFrame:
+    """
+    Score RNA expression for a gene across all cell lines.
+
+    HPA + DepMap are the primary sources (equal weight when both present).
+    GEO acts as a confirmation signal only (±0.10 additive bonus, not mixed
+    into the percentile ranking).
+
+    Returns columns:
+        cellosaurus_id, rna_score, hpa_score, depmap_score,
+        n_primary_sources, missing_data_flag,
+        geo_confirmation, geo_n_samples
     """
     _empty = pd.DataFrame(
-        columns=["cellosaurus_id", "rna_score", "n_rna_sources",
-                 "hpa_score", "depmap_score", "geo_score"]
+        columns=[
+            "cellosaurus_id", "rna_score", "hpa_score", "depmap_score",
+            "n_primary_sources", "missing_data_flag",
+            "geo_confirmation", "geo_n_samples",
+        ]
     )
 
     # ── HPA: nTPM only, threshold > 1 ────────────────────────────────────────
@@ -70,8 +93,10 @@ def score_rna_expression(gene: str, hpa_to_cvcl: dict, gsm_to_cvcl: dict) -> pd.
             cvcl = agg.index.map(hpa_to_cvcl)
             mask = cvcl.notna()
             hpa_df = (
-                pd.DataFrame({"cellosaurus_id": cvcl[mask].values,
-                               "hpa_score": _pct_rank(agg[mask])})
+                pd.DataFrame({
+                    "cellosaurus_id": cvcl[mask].values,
+                    "hpa_score": _pct_rank(agg[mask]),
+                })
                 .groupby("cellosaurus_id")["hpa_score"].mean()
                 .reset_index()
             )
@@ -93,29 +118,33 @@ def score_rna_expression(gene: str, hpa_to_cvcl: dict, gsm_to_cvcl: dict) -> pd.
                 "depmap_score": _pct_rank(agg),
             })
 
-    # ── GEO: no threshold (units unknown) ────────────────────────────────────
+    # ── GEO: confirmation signal only ────────────────────────────────────────
+    # Multiple GSMs per cell line → take median; CV = std/|median|
     geo_raw = pd.read_parquet(
         PARQUET_DIR / "gene_expr_geo_preprocessed.parquet",
         filters=[("gene_symbol", "=", gene)],
         columns=["original_id", "expression_value"],
     )
-    geo_df = pd.DataFrame(columns=["cellosaurus_id", "geo_score"])
+    geo_df = pd.DataFrame(columns=["cellosaurus_id", "geo_expressed", "geo_cv", "geo_n_samples"])
     if len(geo_raw) > 0:
         geo_raw["cellosaurus_id"] = geo_raw["original_id"].map(gsm_to_cvcl)
         geo_raw = geo_raw.dropna(subset=["cellosaurus_id"])
         if len(geo_raw) > 0:
-            agg = geo_raw.groupby("cellosaurus_id")["expression_value"].mean()
+            g = geo_raw.groupby("cellosaurus_id")["expression_value"]
+            med = g.median()
+            std = g.std().fillna(0.0)
+            n   = g.count()
+            cv  = (std / med.abs().clip(lower=1e-9)).clip(upper=10.0)
             geo_df = pd.DataFrame({
-                "cellosaurus_id": agg.index,
-                "geo_score": _pct_rank(agg),
+                "cellosaurus_id": med.index,
+                "geo_median":     med.values,
+                "geo_cv":         cv.values,
+                "geo_n_samples":  n.values,
+                "geo_expressed":  ((med.values > 0) & (cv.values < 0.5)),
             })
 
-    # ── Weighted merge ────────────────────────────────────────────────────────
-    all_cvcl = (
-        set(hpa_df["cellosaurus_id"])
-        | set(dep_df["cellosaurus_id"])
-        | set(geo_df["cellosaurus_id"])
-    )
+    # ── Merge primary sources ─────────────────────────────────────────────────
+    all_cvcl = set(hpa_df["cellosaurus_id"]) | set(dep_df["cellosaurus_id"])
     if not all_cvcl:
         return _empty
 
@@ -123,30 +152,55 @@ def score_rna_expression(gene: str, hpa_to_cvcl: dict, gsm_to_cvcl: dict) -> pd.
         pd.DataFrame({"cellosaurus_id": list(all_cvcl)})
         .merge(hpa_df, on="cellosaurus_id", how="left")
         .merge(dep_df, on="cellosaurus_id", how="left")
-        .merge(geo_df, on="cellosaurus_id", how="left")
     )
 
-    _W = {"hpa_score": 0.4, "depmap_score": 0.4, "geo_score": 0.2}
+    # Equal-weight combination; falls back to single source if only one present
+    def _rna(row):
+        h, d = row["hpa_score"], row["depmap_score"]
+        has_h, has_d = pd.notna(h), pd.notna(d)
+        if has_h and has_d:
+            return 0.5 * h + 0.5 * d, 2, False
+        elif has_h:
+            return h, 1, False
+        elif has_d:
+            return d, 1, False
+        return 0.0, 0, True  # flagged: no primary data
 
-    def _weighted(row):
-        avail = {k: w for k, w in _W.items() if pd.notna(row[k])}
-        if not avail:
-            return np.nan, 0
-        total = sum(avail.values())
-        return sum(row[k] * w / total for k, w in avail.items()), len(avail)
+    tmp = result.apply(_rna, axis=1, result_type="expand")
+    result["rna_score"]         = tmp[0]
+    result["n_primary_sources"] = tmp[1].astype(int)
+    result["missing_data_flag"] = tmp[2]
 
-    combined = result.apply(_weighted, axis=1)
-    result["rna_score"] = [v[0] for v in combined]
-    result["n_rna_sources"] = [v[1] for v in combined]
+    # ── GEO confirmation bonus / penalty ─────────────────────────────────────
+    result = result.merge(
+        geo_df[["cellosaurus_id", "geo_expressed", "geo_n_samples"]],
+        on="cellosaurus_id", how="left",
+    )
 
-    return result[["cellosaurus_id", "rna_score", "n_rna_sources",
-                   "hpa_score", "depmap_score", "geo_score"]]
+    def _geo_conf(row):
+        if pd.isna(row["geo_n_samples"]):
+            return 0.0                               # no GEO data → neutral
+        if row["geo_expressed"]:
+            return GEO_BONUS                         # GEO confirms expression
+        elif row["rna_score"] > 0:
+            return GEO_PENALTY                       # GEO contradicts primary
+        return 0.0                                   # both say absent → neutral
+
+    result["geo_confirmation"] = result.apply(_geo_conf, axis=1)
+
+    return result[[
+        "cellosaurus_id", "rna_score", "hpa_score", "depmap_score",
+        "n_primary_sources", "missing_data_flag",
+        "geo_confirmation", "geo_n_samples",
+    ]]
 
 
 def score_protein_expression(gene: str, ach_to_cvcl: dict) -> pd.DataFrame:
-    """Score protein expression from CCLE MS proteomics for a given gene.
+    """
+    Percentile-rank protein expression from CCLE MS proteomics.
+    No threshold — MS intensity scale is different from RNA.
 
-    Columns: cellosaurus_id, protein_score
+    Returns columns: cellosaurus_id, protein_score
     """
     prot_raw = pd.read_parquet(
         PARQUET_DIR / "gene_expr_ccle_proteomics_preprocessed.parquet",
@@ -170,36 +224,45 @@ def score_data_quality(
     rna_df: pd.DataFrame,
     protein_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Score data quality for each cell line.
+    """
+    Data quality score per cell line.
 
-    quality_score = 0.4*(n_sources/3) + 0.4*(1 - cross_source_std) + 0.2*completeness
+    quality = 0.40*(n_primary_sources/2)
+            + 0.40*(1 - cross_source_std_HPA_DepMap)
+            + 0.20*completeness
 
-    Columns: cellosaurus_id, quality_score, n_sources, cross_source_std, completeness
+    cross_source_std is between HPA and DepMap only (GEO excluded — units unknown).
+
+    Returns columns: cellosaurus_id, quality_score, n_sources,
+                     cross_source_std, completeness
     """
     conf = pd.read_parquet(MASTER_CONFIDENCE, columns=["cellosaurus_id", "confidence"])
 
-    rna_cols = ["cellosaurus_id", "n_rna_sources", "hpa_score", "depmap_score", "geo_score"]
-    rna_subset = rna_df[[c for c in rna_cols if c in rna_df.columns]]
+    rna_cols = ["cellosaurus_id", "n_primary_sources", "hpa_score", "depmap_score"]
+    rna_sub  = rna_df[[c for c in rna_cols if c in rna_df.columns]]
 
     result = (
         pd.DataFrame({"cellosaurus_id": list(cellosaurus_ids)})
-        .merge(rna_subset, on="cellosaurus_id", how="left")
+        .merge(rna_sub, on="cellosaurus_id", how="left")
         .merge(conf, on="cellosaurus_id", how="left")
     )
-
-    for col in ["n_rna_sources", "hpa_score", "depmap_score", "geo_score"]:
+    for col in ["n_primary_sources", "hpa_score", "depmap_score"]:
         if col not in result.columns:
             result[col] = np.nan
 
-    source_cols = ["hpa_score", "depmap_score", "geo_score"]
-    result["cross_source_std"] = result[source_cols].std(axis=1, skipna=True).fillna(0.0)
-    result["n_sources"] = result["n_rna_sources"].fillna(0.0)
+    # std between HPA and DepMap only — NaN if either missing (then =0)
+    result["cross_source_std"] = (
+        result[["hpa_score", "depmap_score"]]
+        .std(axis=1, skipna=True)
+        .fillna(0.0)
+    )
+    result["n_sources"]    = result["n_primary_sources"].fillna(0.0)
     result["completeness"] = result["confidence"].fillna(0.0)
 
     result["quality_score"] = (
-        0.4 * (result["n_sources"] / 3.0)
-        + 0.4 * (1.0 - result["cross_source_std"])
-        + 0.2 * result["completeness"]
+        0.40 * (result["n_sources"] / 2.0)        # /2 = two primary sources
+        + 0.40 * (1.0 - result["cross_source_std"])
+        + 0.20 * result["completeness"]
     )
 
     return result[["cellosaurus_id", "quality_score", "n_sources",
@@ -211,47 +274,59 @@ def score_context(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
 ) -> pd.DataFrame:
-    """Score disease/lineage context match for each cell line.
+    """
+    Context relevance score.
 
-    context_score = max(disease_match, lineage_match); 1.0 if filter matches, else 0.0
+    disease_match: 1.0 exact, 0.5 partial (substring), 0.0 none
+    lineage_match: 1.0 match, 0.0 none
+    context_score = max(disease_match, lineage_match)
 
-    Columns: cellosaurus_id, context_score, disease, lineage
+    Returns columns: cellosaurus_id, context_score, disease, lineage
     """
     lkp = pd.read_parquet(
         CELL_LINE_LOOKUP, columns=["cellosaurus_id", "disease", "lineage"]
     )
-    result = pd.DataFrame({"cellosaurus_id": list(cellosaurus_ids)}).merge(
-        lkp, on="cellosaurus_id", how="left"
+    result = (
+        pd.DataFrame({"cellosaurus_id": list(cellosaurus_ids)})
+        .merge(lkp, on="cellosaurus_id", how="left")
     )
 
+    def _dmatch(val: str | float) -> float:
+        if not pd.notna(val) or not val:
+            return 0.0
+        v, f = str(val).lower().strip(), disease_filter.lower().strip()
+        if v == f:
+            return 1.0
+        return 0.5 if (f in v or v in f) else 0.0
+
+    def _lmatch(val: str | float) -> float:
+        if not pd.notna(val) or not val:
+            return 0.0
+        v, f = str(val).lower().strip(), lineage_filter.lower().strip()
+        return 1.0 if (f in v or v == f) else 0.0
+
     result["disease_match"] = (
-        result["disease"].fillna("").str.lower()
-        .str.contains(disease_filter.lower(), regex=False)
-        .astype(float)
-    ) if disease_filter else 0.0
-
+        result["disease"].apply(_dmatch) if disease_filter else 0.0
+    )
     result["lineage_match"] = (
-        result["lineage"].fillna("").str.lower()
-        .str.contains(lineage_filter.lower(), regex=False)
-        .astype(float)
-    ) if lineage_filter else 0.0
-
+        result["lineage"].apply(_lmatch) if lineage_filter else 0.0
+    )
     result["context_score"] = result[["disease_match", "lineage_match"]].max(axis=1)
 
     return result[["cellosaurus_id", "context_score", "disease", "lineage"]]
 
 
 if __name__ == "__main__":
-    print("Testing scorer with EGFR...")
+    print("Scorer self-test (EGFR)...")
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
-    print(f"  HPA mappings: {len(hpa_to_cvcl):,}")
-    print(f"  ACH mappings: {len(ach_to_cvcl):,}")
-    print(f"  GSM mappings: {len(gsm_to_cvcl):,}")
 
     rna = score_rna_expression("EGFR", hpa_to_cvcl, gsm_to_cvcl)
-    print(f"\nRNA scores: {len(rna)} cell lines")
+    print(f"RNA: {len(rna)} cell lines | "
+          f"GEO bonus: {(rna['geo_confirmation'] > 0).sum()} | "
+          f"GEO penalty: {(rna['geo_confirmation'] < 0).sum()} | "
+          f"missing: {rna['missing_data_flag'].sum()}")
     print(rna.sort_values("rna_score", ascending=False).head(5).to_string(index=False))
 
     prot = score_protein_expression("EGFR", ach_to_cvcl)
-    print(f"\nProtein scores: {len(prot)} cell lines")
+    print(f"\nProtein: {len(prot)} cell lines")
     print(prot.sort_values("protein_score", ascending=False).head(5).to_string(index=False))

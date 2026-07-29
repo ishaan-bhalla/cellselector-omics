@@ -16,7 +16,6 @@ from models.classical.weights_learned import (
 
 
 def _compute_mrr(results_by_gene: dict, name_to_cvcl: dict) -> float:
-    """MRR from pre-ran rank() results."""
     all_rr: list[float] = []
     for gene, (results, known_names) in results_by_gene.items():
         if results is None or len(results) == 0:
@@ -29,7 +28,6 @@ def _compute_mrr(results_by_gene: dict, name_to_cvcl: dict) -> float:
 
 
 def _hit_rate(results_by_gene: dict, name_to_cvcl: dict, k: int) -> float:
-    """Fraction of genes with at least one known line in the top-k results."""
     if not results_by_gene:
         return 0.0
     hits = 0
@@ -47,35 +45,28 @@ def evaluate_both() -> dict:
     """Compare FIXED_WEIGHTS vs LEARNED_WEIGHTS on the validation gene set."""
     name_to_cvcl = _build_name_to_cvcl()
 
-    # ── Optimise first (pre-computes scores once internally) ─────────────────
     print("=== Optimising weights ===")
     learned_weights = optimise_weights(VALIDATION_SET)
 
-    # ── Rank with FIXED weights ───────────────────────────────────────────────
     print("\n=== Ranking with FIXED weights ===")
     fixed_results: dict = {}
     for gene, known_names in VALIDATION_SET.items():
         print(f"  {gene}...")
-        r = rank(gene, top_n=None, weights=FIXED_WEIGHTS)
-        fixed_results[gene] = (r, known_names)
+        fixed_results[gene] = (rank(gene, top_n=None, weights=FIXED_WEIGHTS), known_names)
 
-    # ── Rank with LEARNED weights ─────────────────────────────────────────────
     print("\n=== Ranking with LEARNED weights ===")
     learned_results: dict = {}
     for gene, known_names in VALIDATION_SET.items():
         print(f"  {gene}...")
-        r = rank(gene, top_n=None, weights=learned_weights)
-        learned_results[gene] = (r, known_names)
+        learned_results[gene] = (rank(gene, top_n=None, weights=learned_weights), known_names)
 
-    # ── Metrics ───────────────────────────────────────────────────────────────
-    fixed_mrr   = _compute_mrr(fixed_results,   name_to_cvcl)
-    learned_mrr = _compute_mrr(learned_results, name_to_cvcl)
-    fixed_hr5   = _hit_rate(fixed_results,   name_to_cvcl, k=5)
-    fixed_hr10  = _hit_rate(fixed_results,   name_to_cvcl, k=10)
+    fixed_mrr    = _compute_mrr(fixed_results,   name_to_cvcl)
+    learned_mrr  = _compute_mrr(learned_results, name_to_cvcl)
+    fixed_hr5    = _hit_rate(fixed_results,   name_to_cvcl, k=5)
+    fixed_hr10   = _hit_rate(fixed_results,   name_to_cvcl, k=10)
     learned_hr5  = _hit_rate(learned_results, name_to_cvcl, k=5)
     learned_hr10 = _hit_rate(learned_results, name_to_cvcl, k=10)
 
-    # ── Print comparison table ────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("EVALUATION RESULTS")
     print("=" * 60)
@@ -101,22 +92,21 @@ def evaluate_both() -> dict:
                 fr = lr = "not found"
             print(f"{gene:<8} {name:<22} {str(fr):>12} {str(lr):>13}")
 
-    print(f"\nLearned weights: {learned_weights}")
     winner = "LEARNED" if learned_mrr > fixed_mrr else "FIXED"
     delta  = abs(learned_mrr - fixed_mrr)
-    print(f"\n→ {winner} weights win  (MRR delta: {delta:.4f})")
+    print(f"\n→ {winner} weights win  (delta MRR: {delta:.4f})")
+    print(f"  Learned: {learned_weights}")
 
-    # ── Save JSON ─────────────────────────────────────────────────────────────
     output = {
-        "fixed_weights":           FIXED_WEIGHTS,
-        "learned_weights":         learned_weights,
-        "fixed_mrr":               fixed_mrr,
-        "learned_mrr":             learned_mrr,
-        "fixed_hit_rate_at_5":     fixed_hr5,
-        "fixed_hit_rate_at_10":    fixed_hr10,
-        "learned_hit_rate_at_5":   learned_hr5,
-        "learned_hit_rate_at_10":  learned_hr10,
-        "winner":                  winner,
+        "fixed_weights":          FIXED_WEIGHTS,
+        "learned_weights":        {k: float(v) for k, v in learned_weights.items()},
+        "fixed_mrr":              fixed_mrr,
+        "learned_mrr":            learned_mrr,
+        "fixed_hit_rate_at_5":    fixed_hr5,
+        "fixed_hit_rate_at_10":   fixed_hr10,
+        "learned_hit_rate_at_5":  learned_hr5,
+        "learned_hit_rate_at_10": learned_hr10,
+        "winner":                 winner,
     }
     out_path = OUTPUTS_DIR / "model_evaluation.json"
     with open(out_path, "w") as f:

@@ -26,11 +26,12 @@ VALIDATION_SET = {
     "BRCA1": ["HCC1937", "MDA-MB-436"],
 }
 
-_W_KEYS = ["expression_rna", "expression_protein", "quality", "context"]
+# Optimise only the four main weights; geo bonus stays fixed at ±0.10
+_W_KEYS = ["rna", "protein", "quality", "context"]
 
 
 def _build_name_to_cvcl() -> dict:
-    """Build comprehensive cell-line-name → cellosaurus_id lookup."""
+    """Comprehensive cell-line-name → cellosaurus_id lookup."""
     lkp = pd.read_parquet(
         CELL_LINE_LOOKUP,
         columns=["cellosaurus_id", "official_name", "hpa_name",
@@ -58,8 +59,8 @@ def _precompute_scores(
     ach_to_cvcl: dict,
     gsm_to_cvcl: dict,
 ) -> dict:
-    """Pre-compute all component scores for validation genes (called once)."""
-    scores = {}
+    """Pre-compute all component scores for the validation set (run once)."""
+    scores: dict = {}
     for gene in validation_set:
         print(f"  Pre-computing {gene}...")
         rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
@@ -75,16 +76,17 @@ def _precompute_scores(
             .merge(rna_df, on="cellosaurus_id", how="left")
             .merge(protein_df, on="cellosaurus_id", how="left")
         )
-        result["rna_score"]     = result["rna_score"].fillna(0.0)
-        result["protein_score"] = result["protein_score"].fillna(0.0)
+        result["rna_score"]        = result["rna_score"].fillna(0.0)
+        result["protein_score"]    = result["protein_score"].fillna(0.0)
+        result["geo_confirmation"] = result["geo_confirmation"].fillna(0.0)
 
         quality_df = score_data_quality(all_cvcl, rna_df, protein_df)
         result = result.merge(quality_df, on="cellosaurus_id", how="left")
         result["quality_score"] = result["quality_score"].fillna(0.0)
 
-        # Context without a filter: context_score will be 0 for all rows.
-        # The optimizer therefore cannot tune the context weight from MRR alone;
-        # it is included for completeness but will trend toward zero.
+        # Context without filter: context_score = 0 for all rows.
+        # This means the context weight cannot be tuned from MRR alone,
+        # but it is included to keep the weight simplex intact.
         context_df = score_context(all_cvcl)
         result = result.merge(context_df, on="cellosaurus_id", how="left")
         result["context_score"] = result["context_score"].fillna(0.0)
@@ -99,27 +101,25 @@ def mrr_score(
     validation_set: dict = VALIDATION_SET,
     precomputed: dict | None = None,
 ) -> float:
-    """Compute Mean Reciprocal Rank across the validation gene set.
-
-    Higher MRR is better (maximum = 1.0).
-    """
+    """Mean Reciprocal Rank across the validation set. Higher = better."""
     if precomputed is None:
         hpa, ach, gsm = load_mappings()
         precomputed = _precompute_scores(validation_set, hpa, ach, gsm)
 
     name_to_cvcl = _build_name_to_cvcl()
-
     all_rr: list[float] = []
+
     for gene, known_names in validation_set.items():
         if precomputed.get(gene) is None:
             continue
 
         df = precomputed[gene].copy()
         df["final_score"] = (
-            weights["expression_rna"]     * df["rna_score"]
-            + weights["expression_protein"] * df["protein_score"]
-            + weights["quality"]            * df["quality_score"]
-            + weights["context"]            * df["context_score"]
+            weights["rna"]     * df["rna_score"]
+            + weights["protein"] * df["protein_score"]
+            + weights["quality"] * df["quality_score"]
+            + weights["context"] * df["context_score"]
+            + df["geo_confirmation"]   # fixed additive, not optimised
         )
         df = df.sort_values("final_score", ascending=False).reset_index()
 
@@ -128,7 +128,6 @@ def mrr_score(
             for n in known_names
             if name_to_cvcl.get(n.lower())
         }
-
         for cvcl in known_cvcls:
             hits = df.index[df["cellosaurus_id"] == cvcl].tolist()
             all_rr.append(1.0 / (hits[0] + 1) if hits else 0.0)
@@ -137,10 +136,11 @@ def mrr_score(
 
 
 def optimise_weights(validation_set: dict = VALIDATION_SET) -> dict:
-    """Maximise MRR on the validation set via SLSQP with multiple restarts.
+    """
+    Maximise MRR on the validation set via SLSQP with multiple random restarts.
 
-    Pre-computes component scores once; the optimiser inner loop is pure
-    arithmetic, so it runs fast despite the large number of cell lines.
+    Scores are pre-computed once; the optimiser inner loop is pure arithmetic.
+    The geo confirmation bonus stays fixed at ±0.10 (not optimised here).
 
     Returns the best weight dict found.
     """
@@ -149,20 +149,24 @@ def optimise_weights(validation_set: dict = VALIDATION_SET) -> dict:
     precomputed = _precompute_scores(validation_set, hpa, ach, gsm)
 
     def objective(w_arr: np.ndarray) -> float:
-        w = dict(zip(_W_KEYS, w_arr))
-        return -mrr_score(w, validation_set, precomputed)
+        return -mrr_score(dict(zip(_W_KEYS, w_arr)), validation_set, precomputed)
 
     constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
     bounds = [(0.0, 1.0)] * 4
 
+    rng = np.random.default_rng(42)
     starting_points = [
-        [0.48, 0.12, 0.25, 0.15],   # fixed weights
+        [0.50, 0.10, 0.25, 0.15],   # fixed weights as warm start
         [0.60, 0.10, 0.20, 0.10],
         [0.40, 0.20, 0.30, 0.10],
         [0.50, 0.05, 0.35, 0.10],
-        [0.70, 0.10, 0.15, 0.05],
+        [0.70, 0.05, 0.20, 0.05],
         [0.40, 0.10, 0.40, 0.10],
     ]
+    # Add random restarts for robustness
+    for _ in range(4):
+        x = rng.dirichlet(np.ones(4))
+        starting_points.append(x.tolist())
 
     best_result = None
     for x0 in starting_points:
@@ -171,14 +175,13 @@ def optimise_weights(validation_set: dict = VALIDATION_SET) -> dict:
             res = minimize(
                 objective, x0, method="SLSQP",
                 bounds=bounds, constraints=constraints,
-                options={"ftol": 1e-7, "maxiter": 300},
+                options={"ftol": 1e-8, "maxiter": 400},
             )
         if best_result is None or res.fun < best_result.fun:
             best_result = res
 
     best_weights = dict(zip(_W_KEYS, best_result.x))
-    best_mrr = -best_result.fun
-    print(f"\nOptimised weights (MRR={best_mrr:.4f}):")
+    print(f"\nOptimised weights (MRR={-best_result.fun:.4f}):")
     for k, v in best_weights.items():
         print(f"  {k}: {v:.4f}")
 

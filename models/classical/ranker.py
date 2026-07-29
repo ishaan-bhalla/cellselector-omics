@@ -7,6 +7,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
 from models.classical.scorer import (
+    FIXED_WEIGHTS,
     load_mappings,
     score_context,
     score_data_quality,
@@ -14,12 +15,8 @@ from models.classical.scorer import (
     score_rna_expression,
 )
 
-FIXED_WEIGHTS = {
-    "expression_rna":     0.48,
-    "expression_protein": 0.12,
-    "quality":            0.25,
-    "context":            0.15,
-}
+# Re-export for external consumers (evaluate, weights_learned, etc.)
+__all__ = ["FIXED_WEIGHTS", "rank", "explain"]
 
 
 def rank(
@@ -30,16 +27,25 @@ def rank(
     weights: dict = FIXED_WEIGHTS,
     expression_threshold: bool = True,
 ) -> pd.DataFrame:
-    """Rank cell lines by suitability for studying a given gene.
+    """
+    Rank cell lines by suitability for studying a given gene.
 
-    Returns DataFrame with columns:
-    cellosaurus_id, official_name, final_score,
-    rna_score, protein_score, quality_score, context_score,
-    n_sources, disease, lineage, hpa_score, depmap_score, geo_score
+    Final score formula:
+        weights["rna"]     * rna_score
+      + weights["protein"] * protein_score
+      + weights["quality"] * quality_score
+      + weights["context"] * context_score
+      + geo_confirmation_bonus  (additive ±0.10, not weighted)
+
+    Returns columns:
+        cellosaurus_id, official_name, final_score,
+        rna_score, protein_score, quality_score, context_score,
+        geo_confirmation, n_sources, disease, lineage,
+        hpa_score, depmap_score, missing_data_flag
     """
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
 
-    rna_df = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
+    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
     protein_df = score_protein_expression(gene, ach_to_cvcl)
 
     all_cvcl = set(rna_df["cellosaurus_id"]) | set(protein_df["cellosaurus_id"])
@@ -53,12 +59,9 @@ def rank(
         .merge(protein_df, on="cellosaurus_id", how="left")
     )
 
-    result["rna_score"]     = result["rna_score"].fillna(0.0)
-    result["protein_score"] = result["protein_score"].fillna(0.0)
-    result["expr_score"] = (
-        weights["expression_rna"]     * result["rna_score"]
-        + weights["expression_protein"] * result["protein_score"]
-    )
+    result["rna_score"]       = result["rna_score"].fillna(0.0)
+    result["protein_score"]   = result["protein_score"].fillna(0.0)
+    result["geo_confirmation"] = result["geo_confirmation"].fillna(0.0)
 
     quality_df = score_data_quality(all_cvcl, rna_df, protein_df)
     result = result.merge(quality_df, on="cellosaurus_id", how="left")
@@ -69,9 +72,11 @@ def rank(
     result["context_score"] = result["context_score"].fillna(0.0)
 
     result["final_score"] = (
-        result["expr_score"]
-        + weights["quality"]  * result["quality_score"]
-        + weights["context"]  * result["context_score"]
+        weights["rna"]     * result["rna_score"]
+        + weights["protein"] * result["protein_score"]
+        + weights["quality"] * result["quality_score"]
+        + weights["context"] * result["context_score"]
+        + result["geo_confirmation"]   # additive, not weighted
     )
 
     if disease_filter or lineage_filter:
@@ -87,7 +92,8 @@ def rank(
     out_cols = [
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
-        "n_sources", "disease", "lineage", "hpa_score", "depmap_score", "geo_score",
+        "geo_confirmation", "n_sources", "disease", "lineage",
+        "hpa_score", "depmap_score", "missing_data_flag",
     ]
     return result[out_cols].reset_index(drop=True)
 
@@ -100,8 +106,9 @@ def explain(row) -> str:
         else row.get("cellosaurus_id", "Unknown")
     )
 
-    rna = float(row.get("rna_score") or 0)
-    n   = int(row.get("n_sources") or 0)
+    rna   = float(row.get("rna_score") or 0)
+    n     = int(row.get("n_sources") or 0)
+    geo_c = float(row.get("geo_confirmation") or 0)
 
     if rna > 0.8:
         expr_desc = "strongly"
@@ -110,28 +117,38 @@ def explain(row) -> str:
     elif rna > 0:
         expr_desc = "weakly"
     else:
-        expr_desc = "not detectably (RNA data absent)"
+        expr_desc = "not detectably (no primary RNA data)"
 
-    scores = [row.get(k) for k in ("hpa_score", "depmap_score", "geo_score")]
-    avail = [float(v) for v in scores if pd.notna(v)]
-    if len(avail) >= 2:
-        std = float(np.std(avail))
-        consistency = "high" if std < 0.15 else ("moderate" if std < 0.35 else "low")
-    else:
-        consistency = "high"
+    # Cross-source consistency from available hpa/depmap scores
+    hpa_s  = row.get("hpa_score")
+    dep_s  = row.get("depmap_score")
+    avail  = [float(v) for v in [hpa_s, dep_s] if pd.notna(v)]
+    consistency = "high" if len(avail) < 2 else (
+        "high" if abs(avail[0] - avail[1]) < 0.15 else
+        "moderate" if abs(avail[0] - avail[1]) < 0.35 else "low"
+    )
 
-    context = float(row.get("context_score") or 0)
+    geo_str = ""
+    if geo_c > 0:
+        geo_str = " GEO independently confirms expression."
+    elif geo_c < 0:
+        geo_str = " Note: GEO data contradicts primary RNA sources."
+
     disease = row.get("disease") or ""
     lineage = row.get("lineage") or ""
+    context = float(row.get("context_score") or 0)
     context_str = ""
-    if context > 0:
+    if context >= 1.0:
         label = disease if pd.notna(disease) and disease else lineage
-        context_str = f" {label} lineage matches query."
+        context_str = f" {label} exactly matches query."
+    elif context >= 0.5:
+        label = disease if pd.notna(disease) and disease else lineage
+        context_str = f" {label} partially matches query."
 
     confidence_pct = int(round(float(row.get("final_score") or 0) * 100))
 
     return (
         f"{name} expresses the target gene {expr_desc} (RNA score {rna:.2f}) "
-        f"confirmed across {n} of 3 RNA sources with {consistency} consistency."
-        f"{context_str} Overall confidence: {confidence_pct}%"
+        f"confirmed across {n} of 2 primary RNA sources with {consistency} "
+        f"consistency.{geo_str}{context_str} Overall confidence: {confidence_pct}%"
     )
