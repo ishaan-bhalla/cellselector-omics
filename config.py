@@ -21,6 +21,11 @@ CELLOSAURUS       = NOMENCLATURE_DIR / "7_cellosaurus.csv"
 OMICS_PROFILES    = NOMENCLATURE_DIR / "8_DepMap_OmicsProfiles.csv"
 CELL_LINE_LOOKUP  = OUTPUTS_DIR / "cell_line_lookup.parquet"
 
+MODELS_DIR        = PROJECT_ROOT / "models"
+CLASSICAL_DIR     = MODELS_DIR / "classical"
+MASTER_MERGED     = OUTPUTS_DIR / "master_merged.parquet"
+MASTER_CONFIDENCE = OUTPUTS_DIR / "master_with_confidence.parquet"
+
 FILES = {
     "hpa":      GENE_EXPR_DIR / "1_4_hpa_rna_celline.tsv",
     "depmap":   GENE_EXPR_DIR / "2_DepMap_OmicsExpressionAllGenesTPMLogp1Profile.csv",
