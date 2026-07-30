@@ -1,21 +1,20 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import re
+import re, json, os
 from functools import reduce
 
 st.set_page_config(page_title="CellLineFinder", page_icon="🧬", layout="centered")
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap');
 #MainMenu,footer,header{visibility:hidden;}
 .stApp{background:#F1F5F9;}
-.block-container{padding-top:2rem;max-width:880px;}
+.block-container{padding-top:2rem;max-width:900px;}
 *{font-family:'Inter',sans-serif;}
-.head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #E2E8F0;padding-bottom:1.3rem;margin-bottom:0.4rem;}
-.brand{display:flex;align-items:center;gap:0.7rem;}
-.mark{width:38px;height:38px;border-radius:9px;background:linear-gradient(135deg,#0D9488,#0F766E);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:1.1rem;}
-.bt h1{font-size:1.35rem;font-weight:700;color:#0F172A;letter-spacing:-0.3px;margin:0;}
+.head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #E2E8F0;padding-bottom:1.3rem;margin-bottom:1.3rem;}
+.bt h1{font-size:1.4rem;font-weight:700;color:#0F172A;letter-spacing:-0.3px;margin:0;}
 .bt p{font-size:0.82rem;color:#64748B;font-weight:400;margin:1px 0 0 0;}
 .headstats{display:flex;gap:1.8rem;}
 .hs{text-align:right;}
@@ -23,14 +22,17 @@ st.markdown("""
 .hs .l{font-size:0.66rem;color:#94A3B8;text-transform:uppercase;letter-spacing:0.6px;}
 .stTextInput input{background:#fff !important;border:1px solid #CBD5E1 !important;border-radius:9px !important;padding:0.85rem 1.1rem !important;font-size:1rem !important;color:#0F172A !important;font-family:'IBM Plex Mono' !important;}
 .stTextInput input:focus{border-color:#0D9488 !important;box-shadow:0 0 0 3px rgba(13,148,136,0.12) !important;}
-.stButton button{background:#0F172A !important;color:#fff !important;border:none !important;border-radius:9px !important;padding:0.85rem 0 !important;font-weight:600 !important;}
-.stButton button:hover{background:#1E293B !important;}
+.stTextInput input::placeholder{color:#94A3B8 !important;}
+.stButton button{border-radius:9px !important;font-weight:600 !important;padding:0.7rem 0 !important;border:1px solid #CBD5E1 !important;background:#fff !important;color:#334155 !important;}
+.stButton button:hover{border-color:#0D9488 !important;color:#0D9488 !important;}
+.stButton button[kind="primary"]{background:#0F172A !important;color:#fff !important;border-color:#0F172A !important;}
 .parsed{font-size:0.82rem;color:#64748B;margin:0.6rem 0 0 0;font-family:'IBM Plex Mono';}
 .parsed b{color:#0D9488;}
-.resbar{font-size:0.85rem;color:#64748B;margin:1.4rem 0 1rem 0;font-weight:500;}
+.resbar{font-size:0.85rem;color:#64748B;margin:1.3rem 0 0.9rem 0;font-weight:500;}
 .resbar b{color:#0F172A;}
-.card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:1.2rem 1.4rem;margin-bottom:0.8rem;transition:all .15s;}
-.card:hover{border-color:#0D9488;box-shadow:0 4px 16px rgba(15,23,42,0.06);}
+.summary{background:#ECFEFF;border:1px solid #A5F3FC;border-radius:12px;padding:1rem 1.2rem;margin:0.6rem 0 1.2rem 0;font-size:0.9rem;color:#155E63;line-height:1.6;}
+.summary .st{font-weight:700;color:#0E7490;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.6px;margin-bottom:0.4rem;}
+.card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:1.2rem 1.4rem;margin-bottom:0.8rem;}
 .card.top{border-left:3px solid #0D9488;}
 .crow{display:flex;align-items:center;gap:1rem;}
 .rank{font-family:'IBM Plex Mono';font-weight:600;font-size:0.9rem;color:#94A3B8;min-width:30px;}
@@ -46,15 +48,17 @@ st.markdown("""
 .m .v{font-family:'IBM Plex Mono';font-weight:600;font-size:0.98rem;color:#0F172A;}
 .m .k{font-size:0.64rem;color:#94A3B8;text-transform:uppercase;letter-spacing:0.5px;margin-top:1px;}
 .m .v.teal{color:#0D9488;}
-.srcs{display:flex;gap:5px;margin-top:0.85rem;flex-wrap:wrap;}
-.sq{font-family:'IBM Plex Mono';font-size:0.7rem;padding:3px 9px;border-radius:5px;font-weight:500;}
-.sq.on{background:#E6F5F3;color:#0F766E;}
-.sq.off{background:#F1F5F9;color:#B8C2CE;}
+.contrib{display:flex;gap:8px;margin-top:0.9rem;flex-wrap:wrap;}
+.cbox{border:1px solid #E2E8F0;border-radius:8px;padding:5px 10px;font-size:0.72rem;min-width:82px;}
+.cbox .cn{color:#94A3B8;font-family:'IBM Plex Mono';font-size:0.64rem;text-transform:uppercase;letter-spacing:0.4px;}
+.cbox .cl{font-weight:700;margin-top:2px;}
+.cl.high{color:#0F766E;} .cl.med{color:#B9770E;} .cl.low{color:#94A3B8;} .cl.none{color:#CBD5E1;}
 .ev{margin-top:0.85rem;padding-top:0.85rem;border-top:1px solid #EEF2F6;font-size:0.85rem;color:#64748B;line-height:1.5;}
 .ev b{color:#334155;font-weight:600;}
 .ev .d{color:#0D9488;font-weight:600;}
-.chip{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;}
-.chip.mut{background:#FEF2F2;color:#B91C1C;}.chip.fus{background:#F5F3FF;color:#6D28D9;}.chip.comp{background:#E6F5F3;color:#0F766E;}
+.chip{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#E6F5F3;color:#0F766E;}
+.stExpander{border:1px solid #E2E8F0 !important;border-radius:9px !important;background:#F0FDFA !important;margin-top:0.7rem !important;}
+.stExpander summary{font-weight:600 !important;color:#0F766E !important;font-size:0.9rem !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,26 +67,35 @@ PQ="outputs/parquet/"
 
 @st.cache_data
 def load_data():
-    lk = pd.read_parquet("outputs/cell_line_lookup.parquet")
-    hpa = dict(zip(lk["hpa_name"].dropna(), lk.loc[lk["hpa_name"].notna(),"cellosaurus_id"]))
-    meta = lk.set_index("cellosaurus_id")[["disease","lineage"]].to_dict("index")
-    samp = pd.read_csv("data/nomenclature/9_DepMap_sample_info.csv", low_memory=False)
-    ach = dict(zip(samp["DepMap_ID"], samp["RRID"]))
-    geo = pd.read_csv("data/nomenclature/10_GEOInfo.txt", sep="\t", low_memory=False)
-    gsm = dict(zip(geo["Geo_accession"], geo["Cellosaurus_ID"]))
-    m = pd.read_parquet("outputs/master_with_confidence.parquet")
+    lk=pd.read_parquet("outputs/cell_line_lookup.parquet")
+    hpa=dict(zip(lk["hpa_name"].dropna(), lk.loc[lk["hpa_name"].notna(),"cellosaurus_id"]))
+    meta=lk.set_index("cellosaurus_id")[["disease","lineage"]].to_dict("index")
+    samp=pd.read_csv("data/nomenclature/9_DepMap_sample_info.csv", low_memory=False)
+    ach=dict(zip(samp["DepMap_ID"], samp["RRID"]))
+    geo=pd.read_csv("data/nomenclature/10_GEOInfo.txt", sep="\t", low_memory=False)
+    gsm=dict(zip(geo["Geo_accession"], geo["Cellosaurus_ID"]))
+    m=pd.read_parquet("outputs/master_with_confidence.parquet")
     for c in ["has_mutations","has_fusions"]:
         if c not in m: m[c]=False
     keep=[k for k in ["cellosaurus_id","official_name","confidence","evidence_count","has_mutations","has_fusions"] if k in m.columns]
-    return hpa, ach, gsm, m[keep].drop_duplicates("cellosaurus_id"), meta
+    return hpa,ach,gsm,m[keep].drop_duplicates("cellosaurus_id"),meta
 
 @st.cache_data
 def load_gene_set():
     g=pd.read_parquet(PQ+"gene_expr_hpa_preprocessed.parquet", columns=["gene_symbol"])
     return set(g["gene_symbol"].dropna().unique())
 
-hpa_to_id, ach_to_id, gsm_to_id, CONF, META = load_data()
-GENES = load_gene_set()
+hpa_to_id,ach_to_id,gsm_to_id,CONF,META=load_data()
+GENES=load_gene_set()
+
+def load_justifications(gene):
+    path=f"outputs/agentic_results_{gene}.json"
+    if not os.path.exists(path): return {},""
+    try:
+        with open(path,encoding="utf-8") as f: data=json.load(f)
+    except Exception: return {},""
+    just={r.get("cellosaurus_id"):r.get("justification","") for r in data.get("results",[]) if r.get("cellosaurus_id")}
+    return just,data.get("comparative_summary","")
 
 def parse_query(text):
     dl=text.lower()
@@ -91,7 +104,7 @@ def parse_query(text):
     for tok in re.findall(r"[A-Za-z0-9\-]+", text):
         if tok.upper() in GENES:
             gene=tok.upper(); break
-    return gene, disease
+    return gene,disease
 
 @st.cache_data
 def score_source(path, gene, which):
@@ -124,43 +137,101 @@ def recommend(gene, disease_filter=None, top_n=10):
         mask=r["disease"].fillna("").str.lower().str.contains(disease_filter.lower())|r["lineage"].fillna("").str.lower().str.contains(disease_filter.lower())
         r=r[mask]
     r["final_score"]=r["expr_score"]*r["confidence"]
-    return r.sort_values("final_score",ascending=False).head(top_n), len(r)
+    return r.sort_values("final_score",ascending=False).head(top_n),len(r)
 
+@st.cache_data
+def load_all():
+    m=pd.read_parquet("outputs/master_with_confidence.parquet")
+    lk=pd.read_parquet("outputs/cell_line_lookup.parquet")[["cellosaurus_id","disease","lineage"]]
+    d=m.merge(lk,on="cellosaurus_id",how="left")
+    cols=[c for c in ["official_name","cellosaurus_id","confidence","evidence_count","disease","lineage","has_hpa_expr","has_depmap_expr","has_geo_expr","has_proteomics","has_mutations","has_fusions"] if c in d.columns]
+    d=d[cols].drop_duplicates("cellosaurus_id")
+    return d.rename(columns={"official_name":"Cell line","cellosaurus_id":"Cellosaurus ID","confidence":"Confidence","evidence_count":"Evidence","disease":"Disease","lineage":"Lineage","has_hpa_expr":"HPA","has_depmap_expr":"DepMap","has_geo_expr":"GEO","has_proteomics":"Proteomics","has_mutations":"Mutations","has_fusions":"Fusions"})
+
+# ---------- Header ----------
 st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLineFinder</h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
-st.write("")
-c1,c2=st.columns([4,1])
-query=c1.text_input("q",value="show me EGFR lung cancer lines",label_visibility="collapsed",placeholder="Enter a gene or ask in plain English").strip()
-go=c2.button("Search",use_container_width=True)
 
-if query:
-    gene, disease = parse_query(query)
-    if gene is None:
-        st.warning("No recognised gene found in your query. Try including a gene symbol such as EGFR or TP53.")
-    else:
-        st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>' + (f' &middot; tissue <b>{disease}</b>' if disease else '') + '</p>', unsafe_allow_html=True)
-        with st.spinner(f"Ranking cell lines for {gene}"):
-            r,total=recommend(gene, disease)
-        if r is None or len(r)==0:
-            st.warning(f"No results for {gene}" + (f" in {disease}" if disease else "") + ".")
+# ---------- Navigation ----------
+st.markdown("""
+<style>
+div[data-testid="stSegmentedControl"] button{font-weight:600 !important;font-size:0.95rem !important;}
+</style>
+""", unsafe_allow_html=True)
+page = st.segmented_control("nav", ["Search", "All Cell Lines"], default="Search", label_visibility="collapsed")
+if page is None:
+    page = st.session_state.get("page", "Search")
+st.session_state.page = page
+st.write("")
+
+# ---------- SEARCH PAGE ----------
+if st.session_state.page=="Search":
+    sc1,sc2=st.columns([4,1])
+    query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
+    sc2.button("Find", key="do_search", use_container_width=True, type="primary")
+    if query:
+        gene,disease=parse_query(query)
+        if gene is None:
+            st.warning("No recognised gene found. Try a gene symbol such as EGFR or TP53.")
         else:
-            ctx=f" in <b>{disease}</b>" if disease else ""
-            st.markdown(f'<div class="resbar">Showing top {len(r)} of <b>{total}</b> cell lines for {gene}{ctx}</div>', unsafe_allow_html=True)
-            for i,(_,row) in enumerate(r.iterrows(),1):
-                strength="strongly" if row["expr_score"]>=0.5 else "moderately"
-                has_mut=bool(row.get("has_mutations",False)); has_fus=bool(row.get("has_fusions",False))
-                def sq(n,w): return f'<span class="sq {"on" if pd.notna(row.get(w)) else "off"}">{n}</span>'
-                srcs=sq("HPA RNA","hpa")+sq("DepMap","depmap")+sq("GEO","geo")+sq("Proteomics","prot")
-                chips=('<span class="chip comp">complete model</span>' if (has_mut and has_fus) else '')
-                evc=int(row["evidence_count"]) if "evidence_count" in row and pd.notna(row["evidence_count"]) else 0
-                dis=row.get("disease") or ""; lin=row.get("lineage") or ""
-                dis=dis if isinstance(dis,str) and dis and dis!="nan" else ""
-                lin=lin if isinstance(lin,str) and lin and lin!="nan" else ""
-                evp=[]
-                if dis: evp.append(f'<span class="d">{dis}</span>')
-                if lin: evp.append(f'{lin} lineage')
-                evp.append(f'expresses {gene} {strength} across {int(row["n_sources"])} of 4 datasets')
-                if has_mut: evp.append("mutation reported")
-                if has_fus: evp.append("fusion reported")
-                ev=f'<div class="ev"><b>Evidence:</b> ' + " &middot; ".join(evp) + f'. Backed by {evc} of 3 nomenclature sources.{chips}</div>'
-                cc="card top" if i<=3 else "card"; rc="rank hi" if i<=3 else "rank"
-                st.markdown(f"""<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row['official_name']}</span> <span class="cid">{row['cellosaurus_id']}</span></div><div class="score"><div class="n">{row['final_score']:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row['expr_score']:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row['confidence']:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row['n_sources'])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="srcs">{srcs}</div>{ev}</div>""", unsafe_allow_html=True)
+            st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
+            JUST,SUMMARY=load_justifications(gene)
+            r,total=recommend(gene,disease)
+            if r is None or len(r)==0:
+                st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
+            else:
+                ctx=f" in <b>{disease}</b>" if disease else ""
+                st.markdown(f'<div class="resbar">Showing top {len(r)} of <b>{total}</b> cell lines for {gene}{ctx}</div>', unsafe_allow_html=True)
+                if SUMMARY:
+                    st.markdown('<div class="summary"><div class="st">AI comparative summary</div>'+SUMMARY.replace(chr(10),"<br>")+'</div>', unsafe_allow_html=True)
+                for i,(_,row) in enumerate(r.iterrows(),1):
+                    strength="strongly" if row["expr_score"]>=0.5 else "moderately"
+                    has_mut=bool(row.get("has_mutations",False)); has_fus=bool(row.get("has_fusions",False))
+                    def contrib(label,w):
+                        v=row.get(w)
+                        if v is None or pd.isna(v): lvl,cls="No data","none"
+                        elif v>=0.66: lvl,cls="High","high"
+                        elif v>=0.33: lvl,cls="Medium","med"
+                        else: lvl,cls="Low","low"
+                        return f'<div class="cbox"><div class="cn">{label}</div><div class="cl {cls}">{lvl}</div></div>'
+                    breakdown=contrib("HPA RNA","hpa")+contrib("DepMap","depmap")+contrib("GEO","geo")+contrib("Proteomics","prot")
+                    chips='<span class="chip">complete model</span>' if (has_mut and has_fus) else ''
+                    evc=int(row["evidence_count"]) if "evidence_count" in row and pd.notna(row["evidence_count"]) else 0
+                    dis=row.get("disease") or ""; lin=row.get("lineage") or ""
+                    dis=dis if isinstance(dis,str) and dis and dis!="nan" else ""
+                    lin=lin if isinstance(lin,str) and lin and lin!="nan" else ""
+                    evp=[]
+                    if dis: evp.append(f'<span class="d">{dis}</span>')
+                    if lin: evp.append(f'{lin} lineage')
+                    evp.append(f'expresses {gene} {strength} across {int(row["n_sources"])} of 4 datasets')
+                    if has_mut: evp.append("mutation reported")
+                    if has_fus: evp.append("fusion reported")
+                    ev='<div class="ev"><b>Evidence:</b> '+" &middot; ".join(evp)+f'. Backed by {evc} of 3 nomenclature sources.{chips}</div>'
+                    cc="card top" if i<=3 else "card"; rc="rank hi" if i<=3 else "rank"
+                    st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span></div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}</div>', unsafe_allow_html=True)
+                    jtext=JUST.get(row["cellosaurus_id"],"")
+                    if jtext:
+                        with st.expander("AI explanation"):
+                            for line in jtext.split(chr(10)):
+                                line=line.strip()
+                                if not line: continue
+                                matched=False
+                                for lbl in ["RECOMMENDATION","KEY REASON","EVIDENCE SUMMARY","TRADE-OFFS","BEST FOR"]:
+                                    if lbl in line.upper():
+                                        txt=line.split(":",1)[-1].strip()
+                                        st.markdown(f"**{lbl.title()}:** {txt}")
+                                        matched=True; break
+                                if not matched:
+                                    st.markdown(line)
+
+# ---------- ALL CELL LINES PAGE ----------
+else:
+    st.markdown("#### All cell lines")
+    st.caption("Browse and download every cell line in the dataset with its data coverage and confidence.")
+    alldf=load_all()
+    fq=st.text_input("f", placeholder="Filter by cell line, disease or lineage", label_visibility="collapsed").strip().lower()
+    vw=alldf
+    if fq:
+        vw=alldf[alldf.apply(lambda r: fq in str(r["Cell line"]).lower() or fq in str(r["Disease"]).lower() or fq in str(r["Lineage"]).lower(), axis=1)]
+    st.markdown(f'<div class="resbar">Showing <b>{len(vw)}</b> of {len(alldf)} cell lines</div>', unsafe_allow_html=True)
+    st.dataframe(vw, use_container_width=True, hide_index=True, height=520)
+    st.download_button("Download as CSV", vw.to_csv(index=False).encode("utf-8"), "all_cell_lines.csv", "text/csv")
