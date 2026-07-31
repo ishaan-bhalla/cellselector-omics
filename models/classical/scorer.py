@@ -24,6 +24,26 @@ FIXED_WEIGHTS = {
 GEO_BONUS   = +0.10
 GEO_PENALTY = -0.10
 
+GENE_CLASSES: dict[str, list[str]] = {
+    "ubiquitous": [
+        "TP53", "PARP1", "CDK4", "CCND1", "ACTB",
+        "GAPDH", "RB1", "ATM", "BRCA1", "BRCA2",
+        "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
+    ],
+    "loss_of_function": [
+        "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
+        "APC", "VHL", "MLH1", "MSH2", "TP53",
+    ],
+}
+
+
+def classify_gene(gene: str) -> str:
+    if gene in GENE_CLASSES["loss_of_function"]:
+        return "loss_of_function"
+    if gene in GENE_CLASSES["ubiquitous"]:
+        return "ubiquitous"
+    return "tissue_specific"
+
 
 def load_mappings() -> tuple[dict, dict, dict]:
     """Return (hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl)."""

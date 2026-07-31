@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
 from models.classical.scorer import (
     FIXED_WEIGHTS,
+    classify_gene,
     load_mappings,
     score_context,
     score_data_quality,
@@ -78,6 +79,8 @@ def rank(
         + weights["context"] * result["context_score"]
         + result["geo_confirmation"]   # additive, not weighted
     )
+    result["final_score"] = result["final_score"].clip(0.0, 1.0)
+    result["gene_class"] = classify_gene(gene)
 
     if disease_filter or lineage_filter:
         result = result[result["context_score"] > 0]
@@ -93,7 +96,7 @@ def rank(
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
         "geo_confirmation", "n_sources", "disease", "lineage",
-        "hpa_score", "depmap_score", "missing_data_flag",
+        "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
     ]
     return result[out_cols].reset_index(drop=True)
 
