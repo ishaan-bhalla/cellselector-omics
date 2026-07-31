@@ -7,7 +7,7 @@ try:
     import ollama
     _OLLAMA_AVAILABLE = True
 except ImportError:
-    _OLLAMA_AVAILABLE = False
+    _OLLAMA_AVAILABLE = False   
 
 _MODEL_PRIMARY = "llama3.1:8b"
 _MODEL_FALLBACK = "llama3:latest"    # used when primary is OOM-killed
