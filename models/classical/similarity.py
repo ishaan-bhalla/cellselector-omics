@@ -46,6 +46,47 @@ _FEATURE_LABELS: dict[str, str] = {
     "context_score":    "tissue/disease relevance",
 }
 
+# ── Per-feature weights ────────────────────────────────────────────────────────
+# Applied as a multiplicative scale to each column before cosine similarity.
+# Expression scores dominate; binary coverage flags are down-weighted so that
+# sharing a full data-coverage profile doesn't overshadow expression similarity.
+
+FEATURE_WEIGHTS: dict[str, float] = {
+    # Data coverage (binary) — low weight
+    "has_metabolomics": 0.3,
+    "has_mirna":        0.3,
+    "has_proteomics":   0.5,
+    "has_hpa_expr":     0.5,
+    "has_depmap_expr":  0.5,
+    "has_geo_expr":     0.5,
+    "has_mutations":    0.3,
+    "has_fusions":      0.3,
+    # Genomic (normalised continuous) — medium weight
+    "MSIScore_norm":    1.0,
+    "Ploidy_norm":      1.0,
+    "CIN_norm":         1.0,
+    "evidence_norm":    1.0,
+    # Gene expression profile — high weight
+    "hpa_score":        2.5,
+    "depmap_score":     2.5,
+    "geo_score":        2.0,
+    "protein_score":    2.0,
+    "rna_score":        3.0,
+    "quality_score":    2.0,
+    "context_score":    2.0,
+}
+
+# Pre-built weight array aligned with FEATURE_NAMES order
+_WEIGHT_VECTOR = np.array(
+    [FEATURE_WEIGHTS[f] for f in FEATURE_NAMES], dtype=np.float64
+)
+
+# Expression features prioritised first when explaining similarity
+_EXPRESSION_FEATURES = frozenset(
+    ["rna_score", "hpa_score", "depmap_score", "protein_score",
+     "geo_score", "quality_score"]
+)
+
 # Binary feature → human-readable data-type label (used for shared_data_types)
 _DATA_TYPE_MAP: dict[str, str] = {
     "has_hpa_expr":     "HPA",
@@ -149,7 +190,8 @@ def build_feature_matrix(
             df[col] = df[col].fillna(0.0)
 
     df = df.reset_index(drop=True)
-    matrix         = df[FEATURE_NAMES].values.astype(np.float64)
+    # Apply feature weights so expression scores dominate cosine similarity
+    matrix          = df[FEATURE_NAMES].values.astype(np.float64) * _WEIGHT_VECTOR
     cellosaurus_ids = df["cellosaurus_id"].tolist()
 
     return matrix, cellosaurus_ids
@@ -229,19 +271,25 @@ def similarity_reason(
     """
     Generate a plain-English explanation for why two cell lines are similar.
 
-    Identifies up to 3 features where both vectors have meaningfully close
-    and non-trivially high values — prioritising informative alignments
-    over shared absence.
+    Expression features are checked first; non-expression features fill
+    remaining slots. Within each group, features are ranked by informative
+    alignment score (high shared value + small difference).
     """
-    diffs     = np.abs(query_vec - similar_vec)
-    avg_vals  = (query_vec + similar_vec) / 2.0
-
-    # Score: high average value + small difference = most informative match
+    diffs      = np.abs(query_vec - similar_vec)
+    avg_vals   = (query_vec + similar_vec) / 2.0
     info_score = avg_vals / (diffs + 0.05)
-    top_idxs   = np.argsort(info_score)[::-1]
+
+    # Split indices: expression features first, everything else after
+    expr_idxs  = [i for i, f in enumerate(feature_names) if f in _EXPRESSION_FEATURES]
+    other_idxs = [i for i, f in enumerate(feature_names) if f not in _EXPRESSION_FEATURES]
+
+    ordered_idxs = (
+        sorted(expr_idxs,  key=lambda i: -float(info_score[i])) +
+        sorted(other_idxs, key=lambda i: -float(info_score[i]))
+    )
 
     reasons: list[str] = []
-    for idx in top_idxs:
+    for idx in ordered_idxs:
         if len(reasons) >= 3:
             break
         feat  = feature_names[idx]
@@ -249,8 +297,9 @@ def similarity_reason(
         diff  = float(diffs[idx])
         label = _FEATURE_LABELS.get(feat, feat)
 
+        # Skip shared-absence — only informative when both have non-trivial values
         if avg < 0.05 and diff < 0.05:
-            continue   # both near zero — shared absence, not interesting
+            continue
 
         if avg >= 0.65 and diff <= 0.20:
             reasons.append(f"both show high {label}")
@@ -269,47 +318,133 @@ def find_alternatives(
     rank_results_df: pd.DataFrame,
     master_merged_path,
     top_k: int = 3,
+    disease_filter: str | None = None,
+    lineage_filter: str | None = None,
 ) -> dict[str, list[dict]]:
     """
     Find the most similar alternative cell lines for each recommended line.
 
+    If disease_filter or lineage_filter is supplied, candidates are first
+    restricted to cell lines whose disease contains disease_filter OR whose
+    lineage contains lineage_filter (case-insensitive substring match).
+    If fewer than top_k same-context alternatives exist, the result falls
+    back to the unfiltered similarity list and each entry carries a "note"
+    field explaining the fallback.
+
     For accuracy, expression scores are computed for ALL cell lines (via a
-    full rank() call), not just the top_n already in rank_results_df.
+    full rank() call with top_n=None), not just the top_n in rank_results_df.
 
     Returns:
         {cellosaurus_id: [
             {
-                "cellosaurus_id":   "CVCL_XXXX",
-                "official_name":    "NCI-H1975",
-                "similarity_score": 0.94,
+                "cellosaurus_id":    "CVCL_XXXX",
+                "official_name":     "NCI-H1975",
+                "similarity_score":  0.94,
                 "shared_data_types": ["HPA", "DepMap", "Mutations"],
-                "similarity_reason": "both show high HPA expression level; ..."
+                "similarity_reason": "both show high HPA expression level; ...",
+                "note":              None | "insufficient same-disease ...",
+                "citations":         {...}
             },
             ...
         ]}
     """
     # Lazy import avoids circular dependency (similarity ↔ ranker)
     from models.classical.ranker import rank as _rank_full
+    from config import CELL_LINE_LOOKUP, DATASET_CITATIONS
 
-    # Score gene across ALL ranked cell lines (top_n=None) for the feature matrix
+    use_context_filter = bool(disease_filter or lineage_filter)
+
+    # ── Expression scores for ALL cell lines ──────────────────────────────────
     print(f"  [similarity] Computing full expression scores for {gene}...")
     full_scores = _rank_full(gene, top_n=None)
 
-    # Load genomic features for all 2,076 cell lines
+    # ── Genomic features ──────────────────────────────────────────────────────
     master_df = pd.read_parquet(master_merged_path)
 
-    # Build feature matrix
-    matrix, cvcl_ids = build_feature_matrix(gene, full_scores, master_df)
+    # ── Disease / lineage lookup (lives in cell_line_lookup, not master_merged)
+    lkp = pd.read_parquet(
+        CELL_LINE_LOOKUP, columns=["cellosaurus_id", "disease", "lineage"]
+    )
+    disease_map  = dict(zip(lkp["cellosaurus_id"], lkp["disease"].fillna("")))
+    lineage_map  = dict(zip(lkp["cellosaurus_id"], lkp["lineage"].fillna("")))
 
-    # Name lookup
+    # Pre-build context-match set for fast lookup
+    if use_context_filter:
+        df_lower = (disease_filter or "").lower()
+        lf_lower = (lineage_filter or "").lower()
+
+        def _matches_context(cvcl: str) -> bool:
+            d = disease_map.get(cvcl, "").lower()
+            l = lineage_map.get(cvcl, "").lower()
+            return (df_lower and df_lower in d) or (lf_lower and lf_lower in l)
+
+        context_cvcl_set = {c for c in lkp["cellosaurus_id"] if _matches_context(c)}
+    else:
+        context_cvcl_set = None
+
+    # ── Build feature matrix and compute similarity ───────────────────────────
+    matrix, cvcl_ids = build_feature_matrix(gene, full_scores, master_df)
     name_map = dict(zip(master_df["cellosaurus_id"], master_df["official_name"]))
 
-    # Compute similarity for each recommended line
     query_ids  = rank_results_df["cellosaurus_id"].tolist()
     id_to_idx  = {c: i for i, c in enumerate(cvcl_ids)}
-    raw_result = compute_similarity(query_ids, matrix, cvcl_ids, top_k=top_k)
 
-    # Annotate with names, shared data types, and plain-English reasons
+    # Fetch a larger candidate pool so we have enough after context filtering
+    fetch_k    = max(top_k * 10, 30) if use_context_filter else top_k
+    raw_result = compute_similarity(query_ids, matrix, cvcl_ids, top_k=fetch_k)
+
+    # ── Build citation template (shared across all alternatives) ─────────────
+    _citation_template = {
+        "data_sources": [
+            (
+                "Expression similarity computed using "
+                "HPA [D1], DepMap [D2], GEO [D3], CCLE Proteomics [D4]"
+            ),
+            "Cell line identity verified via Cellosaurus [D5]",
+        ],
+        "method": (
+            "Cosine similarity on 19-dimensional normalised "
+            "multi-omics feature vector (expression features "
+            "weighted 2-3×; coverage flags 0.3-0.5×)"
+        ),
+        "dataset_keys": {
+            k: {
+                "name":     v["name"],
+                "citation": v["citation"],
+                "pmid":     v["pmid"],
+                "url":      v["url"],
+            }
+            for k, v in DATASET_CITATIONS.items()
+        },
+    }
+
+    def _annotate(s: dict, q_vec: np.ndarray, note: str | None) -> dict:
+        """Convert a raw compute_similarity entry into a fully annotated dict."""
+        scvcl = s["cellosaurus_id"]
+        s_vec = s["_similar_vec"]
+
+        shared = [
+            label
+            for feat, label in _DATA_TYPE_MAP.items()
+            if feat in FEATURE_NAMES
+            and float(q_vec[FEATURE_NAMES.index(feat)]) / FEATURE_WEIGHTS.get(feat, 1.0) > 0.5
+            and float(s_vec[FEATURE_NAMES.index(feat)]) / FEATURE_WEIGHTS.get(feat, 1.0) > 0.5
+        ]
+
+        return {
+            "cellosaurus_id":    scvcl,
+            "official_name":     name_map.get(scvcl, scvcl),
+            "similarity_score":  s["similarity_score"],
+            "shared_data_types": shared,
+            "similarity_reason": similarity_reason(q_vec, s_vec, FEATURE_NAMES),
+            "note":              note,
+            "citations": {
+                **_citation_template,
+                "cellosaurus_url": f"https://www.cellosaurus.org/{scvcl}",
+            },
+        }
+
+    # ── Annotate and apply context filter per query line ─────────────────────
     result: dict[str, list[dict]] = {}
 
     for qcvcl, similar_list in raw_result.items():
@@ -317,31 +452,27 @@ def find_alternatives(
             result[qcvcl] = []
             continue
 
-        q_vec   = matrix[id_to_idx[qcvcl]]
-        cleaned = []
+        q_vec = matrix[id_to_idx[qcvcl]]
 
-        for s in similar_list:
-            scvcl = s["cellosaurus_id"]
-            s_vec = s["_similar_vec"]
+        if use_context_filter:
+            in_context  = [s for s in similar_list if s["cellosaurus_id"] in context_cvcl_set]
+            out_context = [s for s in similar_list if s["cellosaurus_id"] not in context_cvcl_set]
 
-            shared = [
-                label
-                for feat, label in _DATA_TYPE_MAP.items()
-                if feat in FEATURE_NAMES
-                and float(q_vec[FEATURE_NAMES.index(feat)]) > 0.5
-                and float(s_vec[FEATURE_NAMES.index(feat)]) > 0.5
-            ]
+            if len(in_context) >= top_k:
+                # Enough same-context alternatives — use them, no fallback note
+                chosen = [_annotate(s, q_vec, None) for s in in_context[:top_k]]
+            else:
+                # Partial match: take what's available in-context, fill with cross-disease
+                fallback_note = (
+                    "insufficient same-disease alternatives, "
+                    "showing cross-disease similar lines"
+                )
+                chosen = [_annotate(s, q_vec, None) for s in in_context]
+                needed = top_k - len(chosen)
+                chosen += [_annotate(s, q_vec, fallback_note) for s in out_context[:needed]]
+        else:
+            chosen = [_annotate(s, q_vec, None) for s in similar_list[:top_k]]
 
-            reason = similarity_reason(q_vec, s_vec, FEATURE_NAMES)
-
-            cleaned.append({
-                "cellosaurus_id":    scvcl,
-                "official_name":     name_map.get(scvcl, scvcl),
-                "similarity_score":  s["similarity_score"],
-                "shared_data_types": shared,
-                "similarity_reason": reason,
-            })
-
-        result[qcvcl] = cleaned
+        result[qcvcl] = chosen
 
     return result

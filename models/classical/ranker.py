@@ -149,7 +149,12 @@ def rank(
         # Lazy import avoids circular dependency (ranker ↔ similarity)
         from models.classical.similarity import find_alternatives
         from config import MASTER_MERGED
-        alts = find_alternatives(gene, result, MASTER_MERGED, top_k=alternatives_top_k)
+        alts = find_alternatives(
+            gene, result, MASTER_MERGED,
+            top_k=alternatives_top_k,
+            disease_filter=disease_filter,
+            lineage_filter=lineage_filter,
+        )
         result["alternatives"] = result["cellosaurus_id"].map(
             lambda cvcl: alts.get(cvcl, [])
         )

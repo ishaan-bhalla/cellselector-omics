@@ -43,7 +43,11 @@ def run(
     # ── Compute similarity-based alternatives (once, for all ranked lines) ────
     print("[pipeline] Computing similarity alternatives...")
     try:
-        alternatives_map = find_alternatives(gene, ranked, MASTER_MERGED, top_k=3)
+        alternatives_map = find_alternatives(
+            gene, ranked, MASTER_MERGED, top_k=3,
+            disease_filter=disease_filter,
+            lineage_filter=lineage_filter,
+        )
     except Exception as exc:
         print(f"  [warning] similarity failed: {exc}")
         alternatives_map = {}
