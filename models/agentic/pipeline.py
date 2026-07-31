@@ -14,6 +14,7 @@ def run(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
     top_n: int = 5,
+    exclude_genes: list[str] | None = None,
 ) -> dict:
     """
     Full agentic ranking pipeline:
@@ -31,7 +32,8 @@ def run(
 
     # ── Step 1: Classical ranking ─────────────────────────────────────────────
     ranked = rank(gene, disease_filter=disease_filter,
-                  lineage_filter=lineage_filter, top_n=top_n)
+                  lineage_filter=lineage_filter, top_n=top_n,
+                  exclude_genes=exclude_genes)
 
     if ranked is None or len(ranked) == 0:
         print(f"[pipeline] No results for gene: {gene}")
@@ -52,8 +54,26 @@ def run(
         evidence = retrieve_evidence(gene, cvcl, row)
         evidence_list.append(evidence)
 
-        # 2b: Format context for LLM
+        # 2b: Format context for LLM; append exclusion warnings when relevant
         context_str = format_context(gene, evidence)
+
+        exclusion_info = {"excluded_genes": exclude_genes or [], "warnings": []}
+        if exclude_genes:
+            excl_lines = []
+            for excl_gene in exclude_genes:
+                score = float(row.get(f"excluded_{excl_gene}_score", 0) or 0)
+                if score > 0.5:
+                    msg = (
+                        f"EXCLUSION WARNING: This cell line also expresses "
+                        f"{excl_gene} (score={score:.2f}) which was requested "
+                        f"to be excluded. This may confound experimental results."
+                    )
+                    excl_lines.append(msg)
+                    exclusion_info["warnings"].append(
+                        f"{excl_gene} expressed at score {score:.2f} — may confound results"
+                    )
+            if excl_lines:
+                context_str += "\n\n" + "\n".join(excl_lines)
 
         # 2c: Generate LLM justification
         try:
@@ -79,6 +99,7 @@ def run(
             },
             "evidence":       evidence,
             "justification":  justification,
+            "exclusion_info": exclusion_info,
         })
 
     # ── Step 3: Comparative summary ───────────────────────────────────────────
