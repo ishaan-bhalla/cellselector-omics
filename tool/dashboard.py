@@ -61,6 +61,14 @@ st.markdown("""
 .excl-note{margin-top:0.5rem;padding:0.45rem 0.8rem;background:#FFFBEB;border:1px solid #FDE68A;border-radius:7px;font-size:0.78rem;color:#92400E;}
 .stExpander{border:1px solid #E2E8F0 !important;border-radius:9px !important;background:#F0FDFA !important;margin-top:0.7rem !important;}
 .stExpander summary{font-weight:600 !important;color:#0F766E !important;font-size:0.9rem !important;}
+.alt-row{display:flex;align-items:center;gap:0.7rem;padding:0.45rem 0;border-bottom:1px solid #EEF2F6;}
+.alt-row:last-child{border-bottom:none;}
+.alt-sim{font-family:'IBM Plex Mono';font-size:0.88rem;font-weight:700;color:#0D9488;min-width:38px;}
+.alt-name{font-weight:600;font-size:0.88rem;color:#0F172A;}
+.alt-cid{font-family:'IBM Plex Mono';font-size:0.7rem;color:#94A3B8;margin-left:0.3rem;}
+.alt-chips{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;}
+.alt-chip{font-size:0.64rem;font-weight:600;padding:1px 7px;border-radius:20px;background:#E6F5F3;color:#0F766E;}
+.alt-reason{font-size:0.76rem;color:#64748B;margin-top:2px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -98,6 +106,14 @@ def load_justifications(gene):
     except Exception: return {},""
     just={r.get("cellosaurus_id"):r.get("justification","") for r in data.get("results",[]) if r.get("cellosaurus_id")}
     return just,data.get("comparative_summary","")
+
+def load_alternatives(gene):
+    path=f"outputs/agentic_results_{gene}.json"
+    if not os.path.exists(path): return {}
+    try:
+        with open(path,encoding="utf-8") as f: data=json.load(f)
+    except Exception: return {}
+    return {r.get("cellosaurus_id"):r.get("alternatives",[]) for r in data.get("results",[]) if r.get("cellosaurus_id")}
 
 def parse_query(text):
     dl=text.lower()
@@ -205,6 +221,7 @@ if st.session_state.page=="Search":
         else:
             st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+(f' &middot; excluding <b>{", ".join(exclude_genes)}</b>' if exclude_genes else '')+'</p>', unsafe_allow_html=True)
             JUST,SUMMARY=load_justifications(gene)
+            ALTS=load_alternatives(gene)
             r,total=recommend(gene,disease,exclude_genes=exclude_genes)
             if r is None or len(r)==0:
                 st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
@@ -263,6 +280,20 @@ if st.session_state.page=="Search":
                                         matched=True; break
                                 if not matched:
                                     st.markdown(line)
+                    row_alts=ALTS.get(row["cellosaurus_id"],[])
+                    if row_alts:
+                        with st.expander(f"Similar alternatives ({len(row_alts)})"):
+                            st.caption("Cell lines with the most similar multi-omics profile — useful as experimental backups or orthogonal validation.")
+                            rows_html=""
+                            for alt in row_alts:
+                                sim=alt.get("similarity_score",0)
+                                aname=alt.get("official_name",alt.get("cellosaurus_id",""))
+                                acid=alt.get("cellosaurus_id","")
+                                shared=alt.get("shared_data_types",[])
+                                reason=alt.get("similarity_reason","")
+                                chips="".join(f'<span class="alt-chip">{dt}</span>' for dt in shared[:4])
+                                rows_html+=f'<div class="alt-row"><span class="alt-sim">{sim:.2f}</span><div><span class="alt-name">{aname}</span><span class="alt-cid">{acid}</span><div class="alt-reason">{reason}</div></div><div class="alt-chips">{chips}</div></div>'
+                            st.markdown(f'<div style="padding:0.2rem 0">{rows_html}</div>', unsafe_allow_html=True)
 
 # ---------- ALL CELL LINES PAGE ----------
 else:

@@ -27,6 +27,8 @@ def rank(
     weights: dict = FIXED_WEIGHTS,
     expression_threshold: bool = True,
     exclude_genes: list[str] | None = None,
+    include_alternatives: bool = False,
+    alternatives_top_k: int = 3,
 ) -> pd.DataFrame:
     """
     Rank cell lines by suitability for studying a given gene.
@@ -140,7 +142,19 @@ def rank(
     if exclude_genes:
         for g in exclude_genes:
             out_cols.extend([f"excluded_{g}_score", f"excluded_{g}_flag"])
-    return result[out_cols].reset_index(drop=True)
+
+    result = result[out_cols].reset_index(drop=True)
+
+    if include_alternatives:
+        # Lazy import avoids circular dependency (ranker ↔ similarity)
+        from models.classical.similarity import find_alternatives
+        from config import MASTER_MERGED
+        alts = find_alternatives(gene, result, MASTER_MERGED, top_k=alternatives_top_k)
+        result["alternatives"] = result["cellosaurus_id"].map(
+            lambda cvcl: alts.get(cvcl, [])
+        )
+
+    return result
 
 
 def explain(row) -> str:

@@ -3,8 +3,9 @@ import json
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from config import OUTPUTS_DIR
+from config import MASTER_MERGED, OUTPUTS_DIR
 from models.classical.ranker import rank
+from models.classical.similarity import find_alternatives
 from models.agentic.retriever import format_context, retrieve_evidence
 from models.agentic.generator import generate_comparison, generate_justification
 
@@ -38,6 +39,14 @@ def run(
     if ranked is None or len(ranked) == 0:
         print(f"[pipeline] No results for gene: {gene}")
         return {"gene": gene, "results": [], "comparative_summary": ""}
+
+    # ── Compute similarity-based alternatives (once, for all ranked lines) ────
+    print("[pipeline] Computing similarity alternatives...")
+    try:
+        alternatives_map = find_alternatives(gene, ranked, MASTER_MERGED, top_k=3)
+    except Exception as exc:
+        print(f"  [warning] similarity failed: {exc}")
+        alternatives_map = {}
 
     # ── Steps 2a–c: Per-result evidence + LLM justification ──────────────────
     results: list[dict] = []
@@ -100,6 +109,7 @@ def run(
             "evidence":       evidence,
             "justification":  justification,
             "exclusion_info": exclusion_info,
+            "alternatives":   alternatives_map.get(cvcl, []),
         })
 
     # ── Step 3: Comparative summary ───────────────────────────────────────────
