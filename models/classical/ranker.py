@@ -81,6 +81,9 @@ def rank(
         + weights["context"] * result["context_score"]
         + result["geo_confirmation"]   # additive, not weighted
     )
+    # Clip to [0,1] - GEO confirmation bonus (+0.10)
+    # can push scores above 1.0 for top-ranked lines
+    result["final_score"] = result["final_score"].clip(0.0, 1.0)
 
     if disease_filter or lineage_filter:
         result = result[result["context_score"] > 0]

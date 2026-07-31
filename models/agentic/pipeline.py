@@ -1,12 +1,87 @@
 from pathlib import Path
 import json
+import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import OUTPUTS_DIR
 from models.classical.ranker import rank
 from models.agentic.retriever import format_context, retrieve_evidence
-from models.agentic.generator import generate_comparison, generate_justification
+from models.agentic.generator import (
+    add_citations_to_justification,
+    generate_comparison,
+    generate_justification,
+)
+
+
+def _parse_justification(text: str) -> dict:
+    """
+    Parse the numbered justification into structured fields.
+
+    Sections 1-5 are LLM-generated prose extracted as strings.
+    Sections 6 (DATA SOURCES) and 7 (LITERATURE) are appended by
+    add_citations_to_justification() and parsed into lists.
+    """
+    key_map = {
+        "1": "recommendation",
+        "2": "key_reason",
+        "3": "evidence_summary",
+        "4": "trade_offs",
+        "5": "best_for",
+    }
+    sections: dict = {v: "" for v in key_map.values()}
+    sections["data_citations"]      = []
+    sections["literature_citations"] = []
+
+    pattern = re.compile(r"^\s*(\d)\.\s+[A-Z][A-Z\s\-]+:\s*(.*)", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+
+    raw: dict[str, str] = {}
+    for idx, m in enumerate(matches):
+        num        = m.group(1)
+        first_line = m.group(2).strip()
+        start = m.end()
+        end   = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        continuation = text[start:end].strip()
+        content = (first_line + (" " + continuation if continuation else "")).strip()
+        if num in key_map:
+            sections[key_map[num]] = content
+        else:
+            raw[num] = content
+
+    # Section 6: DATA SOURCES → list of "[D1] ..." strings
+    raw6 = raw.get("6", "")
+    if raw6:
+        markers = re.findall(r'\[D\d+\]', raw6)
+        entries = re.split(r'\[D\d+\]', raw6)
+        for marker, entry in zip(markers, entries[1:]):
+            sections["data_citations"].append(f"{marker} {entry.strip()}")
+
+    # Section 7: LITERATURE → list of "[P1] ..." strings
+    raw7 = raw.get("7", "")
+    if raw7:
+        markers = re.findall(r'\[P\d+\]', raw7)
+        entries = re.split(r'\[P\d+\]', raw7)
+        for marker, entry in zip(markers, entries[1:]):
+            sections["literature_citations"].append(f"{marker} {entry.strip()}")
+
+    return sections
+
+
+def _verification_notes(evidence: dict) -> list[str]:
+    """Derive data-quality caveats from evidence dict."""
+    notes = []
+    if not evidence.get("hpa_expression") and not evidence.get("depmap_expression"):
+        notes.append("No primary RNA expression data available")
+    if evidence.get("scores", {}).get("geo_confirmation", 0) < 0:
+        notes.append("GEO data contradicts primary RNA sources — treat with caution")
+    if not evidence.get("proteomics"):
+        notes.append("No proteomics data available for this cell line")
+    if not evidence.get("geo_expression"):
+        notes.append("No GEO validation data found")
+    if not evidence.get("literature"):
+        notes.append("No PubMed literature found for this gene/cell-line pair")
+    return notes
 
 
 def run(
@@ -55,7 +130,7 @@ def run(
         # 2b: Format context for LLM
         context_str = format_context(gene, evidence)
 
-        # 2c: Generate LLM justification
+        # 2c: Generate LLM justification, then append deterministic citation blocks
         try:
             justification = generate_justification(gene, context_str, name)
         except ConnectionError as exc:
@@ -65,10 +140,16 @@ def run(
             print(f"  [warning] LLM error: {exc}")
             justification = f"LLM unavailable: {exc}"
 
+        justification = add_citations_to_justification(
+            justification,
+            evidence.get("dataset_citations", []),
+            evidence.get("literature", []),
+        )
+
         results.append({
-            "rank":           rank_pos + 1,
-            "cellosaurus_id": cvcl,
-            "official_name":  name,
+            "rank":                rank_pos + 1,
+            "cellosaurus_id":      cvcl,
+            "official_name":       name,
             "scores": {
                 "final_score":      final_score,
                 "rna_score":        float(row.get("rna_score") or 0),
@@ -77,8 +158,12 @@ def run(
                 "context_score":    float(row.get("context_score") or 0),
                 "geo_confirmation": float(row.get("geo_confirmation") or 0),
             },
-            "evidence":       evidence,
-            "justification":  justification,
+            "evidence":            evidence,
+            "justification":       justification,
+            "justification_parsed": _parse_justification(justification),
+            "literature":          evidence.get("literature", []),
+            "dataset_citations":   evidence.get("dataset_citations", []),
+            "verification_notes":  _verification_notes(evidence),
         })
 
     # ── Step 3: Comparative summary ───────────────────────────────────────────
