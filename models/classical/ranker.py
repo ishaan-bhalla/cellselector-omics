@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
 from models.classical.scorer import (
     FIXED_WEIGHTS,
+    classify_gene,
     load_mappings,
     score_context,
     score_data_quality,
@@ -41,11 +42,13 @@ def rank(
         cellosaurus_id, official_name, final_score,
         rna_score, protein_score, quality_score, context_score,
         geo_confirmation, n_sources, disease, lineage,
-        hpa_score, depmap_score, missing_data_flag
+        hpa_score, depmap_score, missing_data_flag, gene_class
     """
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
+    gene_class = classify_gene(gene)
 
-    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
+    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl,
+                                      gene_class=gene_class)
     protein_df = score_protein_expression(gene, ach_to_cvcl)
 
     all_cvcl = set(rna_df["cellosaurus_id"]) | set(protein_df["cellosaurus_id"])
@@ -89,11 +92,13 @@ def rank(
     if top_n is not None:
         result = result.head(top_n)
 
+    result["gene_class"] = gene_class
+
     out_cols = [
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
         "geo_confirmation", "n_sources", "disease", "lineage",
-        "hpa_score", "depmap_score", "missing_data_flag",
+        "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
     ]
     return result[out_cols].reset_index(drop=True)
 
@@ -106,27 +111,11 @@ def explain(row) -> str:
         else row.get("cellosaurus_id", "Unknown")
     )
 
-    rna   = float(row.get("rna_score") or 0)
-    n     = int(row.get("n_sources") or 0)
-    geo_c = float(row.get("geo_confirmation") or 0)
-
-    if rna > 0.8:
-        expr_desc = "strongly"
-    elif rna > 0.5:
-        expr_desc = "moderately"
-    elif rna > 0:
-        expr_desc = "weakly"
-    else:
-        expr_desc = "not detectably (no primary RNA data)"
-
-    # Cross-source consistency from available hpa/depmap scores
-    hpa_s  = row.get("hpa_score")
-    dep_s  = row.get("depmap_score")
-    avail  = [float(v) for v in [hpa_s, dep_s] if pd.notna(v)]
-    consistency = "high" if len(avail) < 2 else (
-        "high" if abs(avail[0] - avail[1]) < 0.15 else
-        "moderate" if abs(avail[0] - avail[1]) < 0.35 else "low"
-    )
+    gene       = row.get("gene") or ""
+    gene_class = row.get("gene_class") or "tissue_specific"
+    rna        = float(row.get("rna_score") or 0)
+    n          = int(row.get("n_sources") or 0)
+    geo_c      = float(row.get("geo_confirmation") or 0)
 
     geo_str = ""
     if geo_c > 0:
@@ -147,8 +136,51 @@ def explain(row) -> str:
 
     confidence_pct = int(round(float(row.get("final_score") or 0) * 100))
 
-    return (
-        f"{name} expresses the target gene {expr_desc} (RNA score {rna:.2f}) "
-        f"confirmed across {n} of 2 primary RNA sources with {consistency} "
-        f"consistency.{geo_str}{context_str} Overall confidence: {confidence_pct}%"
-    )
+    if gene_class == "ubiquitous":
+        # RNA score represents cross-source consistency, not expression level
+        if rna > 0.85:
+            cons_desc = "very high"
+        elif rna > 0.65:
+            cons_desc = "good"
+        elif rna > 0.4:
+            cons_desc = "moderate"
+        else:
+            cons_desc = "low"
+        core = (
+            f"{name} shows {cons_desc} cross-source consistency for this "
+            f"broadly-expressed gene (consistency score {rna:.2f} across "
+            f"{n} of 2 primary RNA sources)."
+        )
+    else:
+        # tissue_specific and loss_of_function: expression-level description
+        if rna > 0.8:
+            expr_desc = "strongly"
+        elif rna > 0.5:
+            expr_desc = "moderately"
+        elif rna > 0:
+            expr_desc = "weakly"
+        else:
+            expr_desc = "not detectably (no primary RNA data)"
+
+        hpa_s = row.get("hpa_score")
+        dep_s = row.get("depmap_score")
+        avail = [float(v) for v in [hpa_s, dep_s] if pd.notna(v)]
+        consistency = "high" if len(avail) < 2 else (
+            "high" if abs(avail[0] - avail[1]) < 0.15 else
+            "moderate" if abs(avail[0] - avail[1]) < 0.35 else "low"
+        )
+        core = (
+            f"{name} expresses the target gene {expr_desc} (RNA score {rna:.2f}) "
+            f"confirmed across {n} of 2 primary RNA sources with {consistency} consistency."
+        )
+
+    lof_note = ""
+    if gene_class == "loss_of_function":
+        gene_label = gene if gene else "this gene"
+        lof_note = (
+            f" Note: {gene_label} is typically studied via loss-of-function. "
+            f"These results show lines with HIGH expression (useful as controls). "
+            f"Lines with known {gene_label} mutations may be more relevant for LOF studies."
+        )
+
+    return f"{core}{geo_str}{context_str}{lof_note} Overall confidence: {confidence_pct}%"
