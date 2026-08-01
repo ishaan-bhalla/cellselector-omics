@@ -105,11 +105,15 @@ def load_justifications(gene):
 def parse_query(text):
     dl=text.lower()
     disease=next((w for w in DISEASE_WORDS if w in dl), None)
-    gene=None
+    found=[]
     for tok in re.findall(r"[A-Za-z0-9\-]+", text):
-        if tok.upper() in GENES:
-            gene=tok.upper(); break
-    return gene,disease
+        u=tok.upper()
+        if u in GENES and u not in found:
+            found.append(u)
+        if len(found)>=2: break
+    gene = found[0] if found else None
+    gene2 = found[1] if len(found)>1 else None
+    return gene, gene2, disease
 
 @st.cache_data
 def score_source(path, gene, which):
@@ -144,6 +148,23 @@ def recommend(gene, disease_filter=None, top_n=10):
     r["final_score"]=r["expr_score"]*r["confidence"]
     return r.sort_values("final_score",ascending=False).head(top_n),len(r)
 
+
+
+def recommend_two(geneA, geneB, disease_filter=None, top_n=10):
+    rA, _ = recommend(geneA, disease_filter, top_n=100000)
+    rB, _ = recommend(geneB, disease_filter, top_n=100000)
+    if rA is None or rB is None or len(rA)==0 or len(rB)==0:
+        return None, 0
+    a = rA[["cellosaurus_id","official_name","expr_score","confidence","disease","lineage","n_sources","evidence_count","has_mutations","has_fusions"]].rename(columns={"expr_score":"scoreA"})
+    b = rB[["cellosaurus_id","scoreA"]].rename(columns={"scoreA":"scoreB"}) if False else rB[["cellosaurus_id","expr_score"]].rename(columns={"expr_score":"scoreB"})
+    m = a.merge(b, on="cellosaurus_id", how="inner")
+    if len(m)==0:
+        return None, 0
+    m["expr_score"] = (m["scoreA"] + m["scoreB"]) / 2
+    m["final_score"] = m["expr_score"] * m["confidence"]
+    m = m.sort_values("final_score", ascending=False)
+    return m.head(top_n), len(m)
+
 @st.cache_data
 def load_all():
     m=pd.read_parquet("outputs/master_with_confidence.parquet")
@@ -174,13 +195,18 @@ if st.session_state.page=="Search":
     query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
     sc2.button("Find", key="do_search", use_container_width=True, type="primary")
     if query:
-        gene,disease=parse_query(query)
+        gene,gene2,disease=parse_query(query)
         if gene is None:
             st.warning("No recognised gene found. Try a gene symbol such as EGFR or TP53.")
         else:
-            st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
-            JUST,SUMMARY=load_justifications(gene)
-            r,total=recommend(gene,disease)
+            if gene2:
+                st.markdown(f'<p class="parsed">Detected genes <b>{gene}</b> + <b>{gene2}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
+                JUST,SUMMARY={},""
+                r,total=recommend_two(gene,gene2,disease)
+            else:
+                st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
+                JUST,SUMMARY=load_justifications(gene)
+                r,total=recommend(gene,disease)
             if r is None or len(r)==0:
                 st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
             else:
