@@ -7,7 +7,7 @@ try:
     import ollama
     _OLLAMA_AVAILABLE = True
 except ImportError:
-    _OLLAMA_AVAILABLE = False
+    _OLLAMA_AVAILABLE = False   
 
 _MODEL_PRIMARY = "llama3.1:8b"
 _MODEL_FALLBACK = "llama3:latest"    # used when primary is OOM-killed
@@ -86,6 +86,36 @@ Provide your answer in exactly this format:
 5. BEST FOR: (what experiment type suits this cell line best)"""
 
     return _chat(prompt)
+
+
+def add_citations_to_justification(
+    justification_text: str,
+    dataset_citations: list[dict],
+    literature: list[dict],
+) -> str:
+    """
+    Append structured DATA SOURCES (section 6) and LITERATURE (section 7) blocks
+    to LLM-generated justification text.
+
+    Citations are built deterministically from evidence data rather than relying
+    on the LLM to format them, which was unreliable.
+    """
+    citations_block = "\n\n6. DATA SOURCES:\n"
+    for i, c in enumerate(dataset_citations, 1):
+        citations_block += f"[D{i}] {c['name']}\n"
+        citations_block += f"     {c['citation']}\n"
+        citations_block += f"     PMID:{c['pmid']}\n"
+        citations_block += f"     {c['url']}\n\n"
+
+    citations_block += "\n7. LITERATURE:\n"
+    for i, p in enumerate(literature, 1):
+        citations_block += (
+            f"[P{i}] {p['authors']} ({p['year']}). "
+            f"{p['title']}.\n"
+            f"      PMID:{p['pmid']} | {p['url']}\n\n"
+        )
+
+    return justification_text + citations_block
 
 
 def generate_comparison(

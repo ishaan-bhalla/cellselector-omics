@@ -34,6 +34,40 @@ FILES = {
 }
 
 
+DATASET_CITATIONS: dict[str, dict] = {
+    "HPA_RNA": {
+        "name":      "Human Protein Atlas (HPA) — RNA Expression",
+        "citation":  "Uhlén M et al. Tissue-based map of the human proteome. Science. 2015;347(6220):1260419.",
+        "pmid":      "25613900",
+        "url":       "https://www.proteinatlas.org/",
+    },
+    "DepMap_TPM": {
+        "name":      "Cancer Dependency Map (DepMap) — RNA Expression",
+        "citation":  "Ghandi M et al. Next-generation characterization of the Cancer Cell Line Encyclopedia. Nature. 2019;569(7757):503-508.",
+        "pmid":      "31068700",
+        "url":       "https://depmap.org/",
+    },
+    "GEO_expression": {
+        "name":      "NCBI Gene Expression Omnibus (GEO)",
+        "citation":  "Barrett T et al. NCBI GEO: archive for functional genomics data sets—update. Nucleic Acids Res. 2013;41:D991-5.",
+        "pmid":      "23193258",
+        "url":       "https://www.ncbi.nlm.nih.gov/geo/",
+    },
+    "CCLE_proteomics": {
+        "name":      "Cancer Cell Line Encyclopedia (CCLE) — MS Proteomics",
+        "citation":  "Nusinow DP et al. Quantitative Proteomics of the Cancer Cell Line Encyclopedia. Cell. 2020;180(2):387-402.",
+        "pmid":      "31978347",
+        "url":       "https://portals.broadinstitute.org/ccle",
+    },
+    "Cellosaurus": {
+        "name":      "Cellosaurus",
+        "citation":  "Bairoch A. The Cellosaurus, a Cell-Line Knowledge Resource. J Biomol Tech. 2018;29(2):25-38.",
+        "pmid":      "29805321",
+        "url":       "https://www.cellosaurus.org/",
+    },
+}
+
+
 def setup_dirs():
     for d in (DATA_DIR, GENE_EXPR_DIR, OUTPUTS_DIR, PARQUET_DIR, FIGURES_DIR, DOCS_DIR):
         d.mkdir(parents=True, exist_ok=True)
