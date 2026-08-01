@@ -24,30 +24,20 @@ FIXED_WEIGHTS = {
 GEO_BONUS   = +0.10
 GEO_PENALTY = -0.10
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Gene classification — governs which scoring strategy is applied
-# ─────────────────────────────────────────────────────────────────────────────
-
-GENE_CLASSES: dict[str, set[str]] = {
-    # Expressed in almost every cell line; absolute level is uninformative.
-    # Score by cross-source consistency instead of expression percentile.
-    "ubiquitous": {
+GENE_CLASSES: dict[str, list[str]] = {
+    "ubiquitous": [
         "TP53", "PARP1", "CDK4", "CCND1", "ACTB",
         "GAPDH", "RB1", "ATM", "BRCA1", "BRCA2",
         "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
-    },
-    # Scientists often want lines where the gene is absent / mutated.
-    # Ranking is kept as-is (high expression = useful control), but results
-    # are flagged so users understand the inversion.
-    "loss_of_function": {
+    ],
+    "loss_of_function": [
         "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
         "APC", "VHL", "MLH1", "MSH2", "TP53",
-    },
+    ],
 }
 
 
 def classify_gene(gene: str) -> str:
-    """Return 'loss_of_function', 'ubiquitous', or 'tissue_specific'."""
     if gene in GENE_CLASSES["loss_of_function"]:
         return "loss_of_function"
     if gene in GENE_CLASSES["ubiquitous"]:
