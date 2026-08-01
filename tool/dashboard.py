@@ -8,11 +8,11 @@ st.set_page_config(page_title="CellLineFinder", page_icon="🧬", layout="center
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap');
 #MainMenu,footer,header{visibility:hidden;}
 .stApp{background:#F1F5F9;}
 .block-container{padding-top:2rem;max-width:900px;}
-*{font-family:'Inter',sans-serif;}
+*{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','Helvetica Neue',Helvetica,Arial,sans-serif;}
 .head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #E2E8F0;padding-bottom:1.3rem;margin-bottom:1.3rem;}
 .bt h1{font-size:1.4rem;font-weight:700;color:#0F172A;letter-spacing:-0.3px;margin:0;}
 .bt p{font-size:0.82rem;color:#64748B;font-weight:400;margin:1px 0 0 0;}
@@ -59,6 +59,11 @@ st.markdown("""
 .chip{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#E6F5F3;color:#0F766E;}
 .stExpander{border:1px solid #E2E8F0 !important;border-radius:9px !important;background:#F0FDFA !important;margin-top:0.7rem !important;}
 .stExpander summary{font-weight:600 !important;color:#0F766E !important;font-size:0.9rem !important;}
+
+.bt h1{font-family:'Space Grotesk',sans-serif !important;font-weight:700 !important;font-size:1.7rem !important;letter-spacing:-1px !important;margin:0 !important;line-height:1.1 !important;}
+.bt h1 span{color:#0D9488;}
+
+.bt p{font-family:'Space Grotesk',sans-serif !important;font-weight:600 !important;color:#334155 !important;font-size:0.9rem !important;margin:2px 0 0 0 !important;line-height:1.1 !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -149,7 +154,7 @@ def load_all():
     return d.rename(columns={"official_name":"Cell line","cellosaurus_id":"Cellosaurus ID","confidence":"Confidence","evidence_count":"Evidence","disease":"Disease","lineage":"Lineage","has_hpa_expr":"HPA","has_depmap_expr":"DepMap","has_geo_expr":"GEO","has_proteomics":"Proteomics","has_mutations":"Mutations","has_fusions":"Fusions"})
 
 # ---------- Header ----------
-st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLineFinder</h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
+st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLine<span>Finder</span></h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
 
 # ---------- Navigation ----------
 st.markdown("""
