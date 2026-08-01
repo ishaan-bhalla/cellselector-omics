@@ -33,6 +33,46 @@ FILES = {
     "ms_ccle":  GENE_EXPR_DIR / "4_Harmonized_MS_CCLE_Gygi_subsetted.csv",
 }
 
+# ── Dataset citations (D1-D5) ─────────────────────────────────────────────────
+# Used consistently across similarity results, agentic justifications, and UI.
+DATASET_CITATIONS: dict[str, dict] = {
+    "D1": {
+        "key":      "D1",
+        "name":     "Human Protein Atlas (HPA) RNA",
+        "citation": "Uhlén M et al. (2015). Tissue-based map of the human proteome. Science 347(6220):1260419.",
+        "pmid":     "25613900",
+        "url":      "https://www.proteinatlas.org",
+    },
+    "D2": {
+        "key":      "D2",
+        "name":     "DepMap RNA (CCLE)",
+        "citation": "Ghandi M et al. (2019). Next-generation characterization of the Cancer Cell Line Encyclopedia. Nature 569:503-508.",
+        "pmid":     "31068700",
+        "url":      "https://depmap.org/portal",
+    },
+    "D3": {
+        "key":      "D3",
+        "name":     "GEO Expression",
+        "citation": "Barrett T et al. (2013). NCBI GEO: archive for functional genomics data sets. Nucleic Acids Res 41:D991-5.",
+        "pmid":     "23193258",
+        "url":      "https://www.ncbi.nlm.nih.gov/geo",
+    },
+    "D4": {
+        "key":      "D4",
+        "name":     "CCLE Proteomics (Gygi MS)",
+        "citation": "Nusinow DP et al. (2020). Quantitative proteomics of the Cancer Cell Line Encyclopedia. Cell 180:387-402.",
+        "pmid":     "31978347",
+        "url":      "https://depmap.org/portal/download",
+    },
+    "D5": {
+        "key":      "D5",
+        "name":     "Cellosaurus",
+        "citation": "Bairoch A (2018). The Cellosaurus, a cell-line knowledge resource. J Biomol Tech 29:25-38.",
+        "pmid":     "29805321",
+        "url":      "https://www.cellosaurus.org",
+    },
+}
+
 
 DATASET_CITATIONS: dict[str, dict] = {
     "HPA_RNA": {

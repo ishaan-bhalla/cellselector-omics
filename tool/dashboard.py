@@ -57,13 +57,18 @@ st.markdown("""
 .ev b{color:#334155;font-weight:600;}
 .ev .d{color:#0D9488;font-weight:600;}
 .chip{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#E6F5F3;color:#0F766E;}
+.excl-warn{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#FEF9C3;color:#854D0E;}
+.excl-note{margin-top:0.5rem;padding:0.45rem 0.8rem;background:#FFFBEB;border:1px solid #FDE68A;border-radius:7px;font-size:0.78rem;color:#92400E;}
 .stExpander{border:1px solid #E2E8F0 !important;border-radius:9px !important;background:#F0FDFA !important;margin-top:0.7rem !important;}
 .stExpander summary{font-weight:600 !important;color:#0F766E !important;font-size:0.9rem !important;}
-
-.bt h1{font-family:'Space Grotesk',sans-serif !important;font-weight:700 !important;font-size:1.7rem !important;letter-spacing:-1px !important;margin:0 !important;line-height:1.1 !important;}
-.bt h1 span{color:#0D9488;}
-
-.bt p{font-family:'Space Grotesk',sans-serif !important;font-weight:600 !important;color:#334155 !important;font-size:0.9rem !important;margin:2px 0 0 0 !important;line-height:1.1 !important;}
+.alt-row{display:flex;align-items:center;gap:0.7rem;padding:0.45rem 0;border-bottom:1px solid #EEF2F6;}
+.alt-row:last-child{border-bottom:none;}
+.alt-sim{font-family:'IBM Plex Mono';font-size:0.88rem;font-weight:700;color:#0D9488;min-width:38px;}
+.alt-name{font-weight:600;font-size:0.88rem;color:#0F172A;}
+.alt-cid{font-family:'IBM Plex Mono';font-size:0.7rem;color:#94A3B8;margin-left:0.3rem;}
+.alt-chips{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;}
+.alt-chip{font-size:0.64rem;font-weight:600;padding:1px 7px;border-radius:20px;background:#E6F5F3;color:#0F766E;}
+.alt-reason{font-size:0.76rem;color:#64748B;margin-top:2px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -102,6 +107,14 @@ def load_justifications(gene):
     just={r.get("cellosaurus_id"):r.get("justification","") for r in data.get("results",[]) if r.get("cellosaurus_id")}
     return just,data.get("comparative_summary","")
 
+def load_alternatives(gene):
+    path=f"outputs/agentic_results_{gene}.json"
+    if not os.path.exists(path): return {}
+    try:
+        with open(path,encoding="utf-8") as f: data=json.load(f)
+    except Exception: return {}
+    return {r.get("cellosaurus_id"):r.get("alternatives",[]) for r in data.get("results",[]) if r.get("cellosaurus_id")}
+
 def parse_query(text):
     dl=text.lower()
     disease=next((w for w in DISEASE_WORDS if w in dl), None)
@@ -128,7 +141,19 @@ def score_source(path, gene, which):
     per=per.dropna(subset=["cellosaurus_id"])
     return per.groupby("cellosaurus_id")["score"].max().reset_index()
 
-def recommend(gene, disease_filter=None, top_n=10):
+def _excl_rna_score(excl_gene):
+    """HPA + DepMap averaged expression score for an exclusion gene (returns 0-1)."""
+    parts=[]
+    for path,which in [(PQ+"gene_expr_hpa_preprocessed.parquet","hpa"),(PQ+"gene_expr_depmap_preprocessed.parquet","depmap")]:
+        s=score_source(path,excl_gene,which)
+        if s is not None: parts.append(s.rename(columns={"score":which}))
+    if not parts: return None
+    merged=reduce(lambda a,b:a.merge(b,on="cellosaurus_id",how="outer"),parts)
+    cols=[c for c in ["hpa","depmap"] if c in merged.columns]
+    merged["excl_score"]=merged[cols].mean(axis=1,skipna=True).fillna(0.0)
+    return merged[["cellosaurus_id","excl_score"]]
+
+def recommend(gene, disease_filter=None, top_n=10, exclude_genes=None):
     parts={}
     for path,which in [(PQ+"gene_expr_hpa_preprocessed.parquet","hpa"),(PQ+"gene_expr_depmap_preprocessed.parquet","depmap"),(PQ+"gene_expr_geo_preprocessed.parquet","geo"),(PQ+"gene_expr_ccle_proteomics_preprocessed.parquet","prot")]:
         s=score_source(path,gene,which)
@@ -146,6 +171,20 @@ def recommend(gene, disease_filter=None, top_n=10):
         mask=r["disease"].fillna("").str.lower().str.contains(disease_filter.lower())|r["lineage"].fillna("").str.lower().str.contains(disease_filter.lower())
         r=r[mask]
     r["final_score"]=r["expr_score"]*r["confidence"]
+    # Exclusion gene penalties: final_score *= (1 - excl_rna_score * 0.5)
+    if exclude_genes:
+        for eg in exclude_genes:
+            excl_df=_excl_rna_score(eg)
+            ecol=f"excl_{eg}"
+            if excl_df is not None:
+                r=r.merge(excl_df.rename(columns={"excl_score":ecol}),on="cellosaurus_id",how="left")
+            if ecol not in r.columns: r[ecol]=0.0
+            else: r[ecol]=r[ecol].fillna(0.0)
+            r[f"excl_{eg}_flag"]=r[ecol]>0.5
+            r["final_score"]=(r["final_score"]*(1.0-r[ecol]*0.5)).clip(0.0,1.0)
+        r["exclusion_warning"]=r[[f"excl_{g}_flag" for g in exclude_genes]].any(axis=1)
+    else:
+        r["exclusion_warning"]=False
     return r.sort_values("final_score",ascending=False).head(top_n),len(r)
 
 
@@ -194,19 +233,17 @@ if st.session_state.page=="Search":
     sc1,sc2=st.columns([4,1])
     query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
     sc2.button("Find", key="do_search", use_container_width=True, type="primary")
+    excl_raw=st.text_input("Exclude genes (optional, comma-separated)", placeholder="e.g. TP53, MYC", help="Cell lines expressing these genes will be penalised in the ranking to avoid confounding results").strip()
+    exclude_genes=[g.strip().upper() for g in excl_raw.split(",") if g.strip()] if excl_raw else []
     if query:
         gene,gene2,disease=parse_query(query)
         if gene is None:
             st.warning("No recognised gene found. Try a gene symbol such as EGFR or TP53.")
         else:
-            if gene2:
-                st.markdown(f'<p class="parsed">Detected genes <b>{gene}</b> + <b>{gene2}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
-                JUST,SUMMARY={},""
-                r,total=recommend_two(gene,gene2,disease)
-            else:
-                st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
-                JUST,SUMMARY=load_justifications(gene)
-                r,total=recommend(gene,disease)
+            st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+(f' &middot; excluding <b>{", ".join(exclude_genes)}</b>' if exclude_genes else '')+'</p>', unsafe_allow_html=True)
+            JUST,SUMMARY=load_justifications(gene)
+            ALTS=load_alternatives(gene)
+            r,total=recommend(gene,disease,exclude_genes=exclude_genes)
             if r is None or len(r)==0:
                 st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
             else:
@@ -225,6 +262,17 @@ if st.session_state.page=="Search":
                         else: lvl,cls="Low","low"
                         return f'<div class="cbox"><div class="cn">{label}</div><div class="cl {cls}">{lvl}</div></div>'
                     breakdown=contrib("HPA RNA","hpa")+contrib("DepMap","depmap")+contrib("GEO","geo")+contrib("Proteomics","prot")
+                    excl_warn=bool(row.get("exclusion_warning",False))
+                    excl_badge='<span class="excl-warn">⚠ excludes: '+", ".join(exclude_genes)+'</span>' if excl_warn else ''
+                    excl_detail=""
+                    if excl_warn and exclude_genes:
+                        parts_excl=[]
+                        for eg in exclude_genes:
+                            sc=row.get(f"excl_{eg}",None)
+                            if sc is not None and sc>0.5:
+                                parts_excl.append(f"{eg} ({sc:.2f})")
+                        if parts_excl:
+                            excl_detail=f'<div class="excl-note">⚠ Also expresses: {", ".join(parts_excl)} — may confound {gene} experiments</div>'
                     chips='<span class="chip">complete model</span>' if (has_mut and has_fus) else ''
                     evc=int(row["evidence_count"]) if "evidence_count" in row and pd.notna(row["evidence_count"]) else 0
                     dis=row.get("disease") or ""; lin=row.get("lineage") or ""
@@ -238,7 +286,7 @@ if st.session_state.page=="Search":
                     if has_fus: evp.append("fusion reported")
                     ev='<div class="ev"><b>Evidence:</b> '+" &middot; ".join(evp)+f'. Backed by {evc} of 3 nomenclature sources.{chips}</div>'
                     cc="card top" if i<=3 else "card"; rc="rank hi" if i<=3 else "rank"
-                    st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span></div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span>{excl_badge}</div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}{excl_detail}</div>', unsafe_allow_html=True)
                     jtext=JUST.get(row["cellosaurus_id"],"")
                     if jtext:
                         with st.expander("AI explanation"):
@@ -253,6 +301,20 @@ if st.session_state.page=="Search":
                                         matched=True; break
                                 if not matched:
                                     st.markdown(line)
+                    row_alts=ALTS.get(row["cellosaurus_id"],[])
+                    if row_alts:
+                        with st.expander(f"Similar alternatives ({len(row_alts)})"):
+                            st.caption("Cell lines with the most similar multi-omics profile — useful as experimental backups or orthogonal validation.")
+                            rows_html=""
+                            for alt in row_alts:
+                                sim=alt.get("similarity_score",0)
+                                aname=alt.get("official_name",alt.get("cellosaurus_id",""))
+                                acid=alt.get("cellosaurus_id","")
+                                shared=alt.get("shared_data_types",[])
+                                reason=alt.get("similarity_reason","")
+                                chips="".join(f'<span class="alt-chip">{dt}</span>' for dt in shared[:4])
+                                rows_html+=f'<div class="alt-row"><span class="alt-sim">{sim:.2f}</span><div><span class="alt-name">{aname}</span><span class="alt-cid">{acid}</span><div class="alt-reason">{reason}</div></div><div class="alt-chips">{chips}</div></div>'
+                            st.markdown(f'<div style="padding:0.2rem 0">{rows_html}</div>', unsafe_allow_html=True)
 
 # ---------- ALL CELL LINES PAGE ----------
 else:

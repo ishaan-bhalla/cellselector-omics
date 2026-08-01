@@ -4,8 +4,9 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from config import OUTPUTS_DIR
+from config import MASTER_MERGED, OUTPUTS_DIR
 from models.classical.ranker import rank
+from models.classical.similarity import find_alternatives
 from models.agentic.retriever import format_context, retrieve_evidence
 from models.agentic.generator import (
     add_citations_to_justification,
@@ -89,6 +90,7 @@ def run(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
     top_n: int = 5,
+    exclude_genes: list[str] | None = None,
 ) -> dict:
     """
     Full agentic ranking pipeline:
@@ -106,11 +108,24 @@ def run(
 
     # ── Step 1: Classical ranking ─────────────────────────────────────────────
     ranked = rank(gene, disease_filter=disease_filter,
-                  lineage_filter=lineage_filter, top_n=top_n)
+                  lineage_filter=lineage_filter, top_n=top_n,
+                  exclude_genes=exclude_genes)
 
     if ranked is None or len(ranked) == 0:
         print(f"[pipeline] No results for gene: {gene}")
         return {"gene": gene, "results": [], "comparative_summary": ""}
+
+    # ── Compute similarity-based alternatives (once, for all ranked lines) ────
+    print("[pipeline] Computing similarity alternatives...")
+    try:
+        alternatives_map = find_alternatives(
+            gene, ranked, MASTER_MERGED, top_k=3,
+            disease_filter=disease_filter,
+            lineage_filter=lineage_filter,
+        )
+    except Exception as exc:
+        print(f"  [warning] similarity failed: {exc}")
+        alternatives_map = {}
 
     # ── Steps 2a–c: Per-result evidence + LLM justification ──────────────────
     results: list[dict] = []
@@ -127,10 +142,28 @@ def run(
         evidence = retrieve_evidence(gene, cvcl, row)
         evidence_list.append(evidence)
 
-        # 2b: Format context for LLM
+        # 2b: Format context for LLM; append exclusion warnings when relevant
         context_str = format_context(gene, evidence)
 
-        # 2c: Generate LLM justification, then append deterministic citation blocks
+        exclusion_info = {"excluded_genes": exclude_genes or [], "warnings": []}
+        if exclude_genes:
+            excl_lines = []
+            for excl_gene in exclude_genes:
+                score = float(row.get(f"excluded_{excl_gene}_score", 0) or 0)
+                if score > 0.5:
+                    msg = (
+                        f"EXCLUSION WARNING: This cell line also expresses "
+                        f"{excl_gene} (score={score:.2f}) which was requested "
+                        f"to be excluded. This may confound experimental results."
+                    )
+                    excl_lines.append(msg)
+                    exclusion_info["warnings"].append(
+                        f"{excl_gene} expressed at score {score:.2f} — may confound results"
+                    )
+            if excl_lines:
+                context_str += "\n\n" + "\n".join(excl_lines)
+
+        # 2c: Generate LLM justification
         try:
             justification = generate_justification(gene, context_str, name)
         except ConnectionError as exc:
@@ -158,12 +191,10 @@ def run(
                 "context_score":    float(row.get("context_score") or 0),
                 "geo_confirmation": float(row.get("geo_confirmation") or 0),
             },
-            "evidence":            evidence,
-            "justification":       justification,
-            "justification_parsed": _parse_justification(justification),
-            "literature":          evidence.get("literature", []),
-            "dataset_citations":   evidence.get("dataset_citations", []),
-            "verification_notes":  _verification_notes(evidence),
+            "evidence":       evidence,
+            "justification":  justification,
+            "exclusion_info": exclusion_info,
+            "alternatives":   alternatives_map.get(cvcl, []),
         })
 
     # ── Step 3: Comparative summary ───────────────────────────────────────────
