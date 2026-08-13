@@ -69,6 +69,12 @@ st.markdown("""
 .alt-chips{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;}
 .alt-chip{font-size:0.64rem;font-weight:600;padding:1px 7px;border-radius:20px;background:#E6F5F3;color:#0F766E;}
 .alt-reason{font-size:0.76rem;color:#64748B;margin-top:2px;}
+
+.stExpander p, .stExpander li, .stExpander span, .stExpander div{color:#0F172A !important;}
+.stExpander strong, .stExpander b{color:#0F766E !important;}
+.stExpander [data-testid="stMarkdownContainer"]{color:#0F172A !important;}
+.stExpander [data-testid="stMarkdownContainer"] *{color:#0F172A !important;}
+.stExpander [data-testid="stMarkdownContainer"] strong{color:#0F766E !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,7 +239,8 @@ if st.session_state.page=="Search":
     sc1,sc2=st.columns([4,1])
     query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
     sc2.button("Find", key="do_search", use_container_width=True, type="primary")
-    excl_raw=st.text_input("Exclude genes (optional, comma-separated)", placeholder="e.g. TP53, MYC", help="Cell lines expressing these genes will be penalised in the ranking to avoid confounding results").strip()
+    st.markdown('<p style="font-size:0.82rem;color:#64748B;margin:0.6rem 0 0.2rem 0;"><b style="color:#0F172A;">Exclude genes</b> (optional) - leave out cell lines that also strongly express these genes, useful for studying your target gene in isolation</p>', unsafe_allow_html=True)
+    excl_raw=st.text_input("excl", placeholder="e.g. TP53, MYC", label_visibility="collapsed").strip()
     exclude_genes=[g.strip().upper() for g in excl_raw.split(",") if g.strip()] if excl_raw else []
     if query:
         gene,gene2,disease=parse_query(query)
@@ -244,13 +251,24 @@ if st.session_state.page=="Search":
             JUST,SUMMARY=load_justifications(gene)
             ALTS=load_alternatives(gene)
             r,total=recommend(gene,disease,exclude_genes=exclude_genes)
+            if not JUST and r is not None and len(r)>0:
+                st.info("No AI explanations saved for this gene yet.")
+                if st.button(f"Generate AI explanations for {gene}", key="gen_ai"):
+                    with st.spinner(f"Generating AI explanations for {gene} (this takes a moment)..."):
+                        try:
+                            from models.agentic.pipeline import run as _run_ai
+                            _run_ai(gene, disease_filter=disease, top_n=10)
+                            st.success("Done. Reloading...")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not generate: {e}. Make sure Ollama is running.")
             if r is None or len(r)==0:
                 st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
             else:
                 ctx=f" in <b>{disease}</b>" if disease else ""
                 st.markdown(f'<div class="resbar">Showing top {len(r)} of <b>{total}</b> cell lines for {gene}{ctx}</div>', unsafe_allow_html=True)
                 if SUMMARY:
-                    st.markdown('<div class="summary"><div class="st">AI comparative summary</div>'+SUMMARY.replace(chr(10),"<br>")+'</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="summary"><div class="st">AI overview - comparing the top cells</div>'+SUMMARY.replace(chr(10),"<br>")+'</div>', unsafe_allow_html=True)
                 for i,(_,row) in enumerate(r.iterrows(),1):
                     strength="strongly" if row["expr_score"]>=0.5 else "moderately"
                     has_mut=bool(row.get("has_mutations",False)); has_fus=bool(row.get("has_fusions",False))
@@ -288,19 +306,24 @@ if st.session_state.page=="Search":
                     cc="card top" if i<=3 else "card"; rc="rank hi" if i<=3 else "rank"
                     st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span>{excl_badge}</div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}{excl_detail}</div>', unsafe_allow_html=True)
                     jtext=JUST.get(row["cellosaurus_id"],"")
-                    if jtext:
-                        with st.expander("AI explanation"):
+                    if jtext and jtext.strip() and "RECOMMENDATION" in jtext.upper():
+                        with st.expander("Why this cell? (AI explanation)"):
+                            shown=False
                             for line in jtext.split(chr(10)):
                                 line=line.strip()
                                 if not line: continue
-                                matched=False
+                                printed=False
                                 for lbl in ["RECOMMENDATION","KEY REASON","EVIDENCE SUMMARY","TRADE-OFFS","BEST FOR"]:
                                     if lbl in line.upper():
                                         txt=line.split(":",1)[-1].strip()
-                                        st.markdown(f"**{lbl.title()}:** {txt}")
-                                        matched=True; break
-                                if not matched:
-                                    st.markdown(line)
+                                        if txt:
+                                            st.markdown(f"**{lbl.title()}:** {txt}")
+                                            shown=True
+                                        printed=True; break
+                                if not printed and len(line)>3:
+                                    st.markdown(line); shown=True
+                            if not shown:
+                                st.caption("No detailed explanation available for this cell.")
                     row_alts=ALTS.get(row["cellosaurus_id"],[])
                     if row_alts:
                         with st.expander(f"Similar alternatives ({len(row_alts)})"):
