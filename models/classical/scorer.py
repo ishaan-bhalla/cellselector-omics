@@ -36,6 +36,48 @@ GENE_CLASSES: dict[str, list[str]] = {
     ],
 }
 
+GENE_ROLES: dict[str, str] = {
+    # Receptor tyrosine kinases
+    "EGFR":   "receptor tyrosine kinase",
+    "ERBB2":  "receptor tyrosine kinase (HER2)",
+    "ERBB3":  "receptor tyrosine kinase (HER3)",
+    "MET":    "receptor tyrosine kinase",
+    "KIT":    "receptor tyrosine kinase",
+    "ALK":    "receptor tyrosine kinase",
+    "RET":    "receptor tyrosine kinase",
+    "FLT3":   "receptor tyrosine kinase",
+    "PDGFRA": "receptor tyrosine kinase",
+    # Hormone receptors
+    "ESR1": "estrogen receptor",
+    "AR":   "androgen receptor",
+    "PGR":  "progesterone receptor",
+    # Immune checkpoint / surface markers
+    "CD274": "immune checkpoint marker (PD-L1)",
+    "PDCD1": "immune checkpoint marker (PD-1)",
+    "CTLA4": "immune checkpoint marker",
+    # Tumor suppressors
+    "TP53":  "tumor suppressor",
+    "RB1":   "tumor suppressor",
+    "PTEN":  "tumor suppressor",
+    "BRCA1": "tumor suppressor (DNA repair)",
+    "BRCA2": "tumor suppressor (DNA repair)",
+    "APC":   "tumor suppressor",
+    "VHL":   "tumor suppressor",
+    # Oncogenes / signaling
+    "KRAS":   "oncogene (RAS family GTPase)",
+    "BRAF":   "oncogene (kinase)",
+    "MYC":    "oncogene (transcription factor)",
+    "MYCN":   "oncogene (transcription factor)",
+    "PIK3CA": "oncogene (kinase)",
+    # Proliferation markers
+    "MKI67": "proliferation marker (Ki-67)",
+    "PCNA":  "proliferation marker",
+}
+
+
+def get_gene_role(gene: str) -> str | None:
+    return GENE_ROLES.get(gene.upper())
+
 
 def classify_gene(gene: str) -> str:
     if gene in GENE_CLASSES["loss_of_function"]:
