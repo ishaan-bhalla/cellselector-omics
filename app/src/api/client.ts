@@ -45,4 +45,21 @@ export const api = {
     const qs = q.toString()
     return fetch(`/cell-lines${qs ? '?' + qs : ''}`).then(r => r.json())
   },
+
+  exploreGraph: (gene: string, diseaseFilter?: string) => {
+    const q = new URLSearchParams()
+    if (diseaseFilter) q.append('disease_filter', diseaseFilter)
+    const qs = q.toString()
+    return fetch(`/graph/explore/${encodeURIComponent(gene)}${qs ? '?' + qs : ''}`).then(r => r.json())
+  },
+
+  pathwayNeighbors: (gene: string) =>
+    fetch(`/graph/pathway-neighbors/${encodeURIComponent(gene)}`).then(r => r.json()),
+
+  cellLinesViaPathway: (gene: string, diseaseFilter?: string, topK = 5) => {
+    const q = new URLSearchParams()
+    if (diseaseFilter) q.append('disease_filter', diseaseFilter)
+    q.append('top_k', String(topK))
+    return fetch(`/graph/cell-lines-via-pathway/${encodeURIComponent(gene)}?${q.toString()}`).then(r => r.json())
+  },
 }

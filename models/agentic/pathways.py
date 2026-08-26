@@ -1,7 +1,7 @@
 import time
 import warnings
-from urllib import error as urllib_error
-from urllib import request
+
+import requests
 
 _RATE_SLEEP = 0.35
 _KEGG_BASE = "https://rest.kegg.jp"
@@ -9,13 +9,24 @@ _KEGG_BASE = "https://rest.kegg.jp"
 # All human KEGG pathway names, fetched once per process: {hsa04010: "Cell cycle"}
 _ALL_PATHWAY_NAMES: dict[str, str] | None = None
 
+# All human KEGG gene ID -> primary symbol, fetched once per process:
+# {"hsa:1956": "EGFR", ...}. One bulk request replaces one request per gene,
+# which is what makes resolving a whole pathway's membership (50-300+ genes)
+# tractable instead of minutes of rate-limited per-gene lookups.
+_ALL_GENE_SYMBOLS: dict[str, str] | None = None
+
+# Gene symbols per pathway, fetched once per process: {hsa04012: ["EGFR", ...]}
+_PATHWAY_GENES_CACHE: dict[str, list[str]] = {}
+
 
 def _kegg_get(endpoint: str) -> str | None:
     url = f"{_KEGG_BASE}/{endpoint}"
     try:
-        with request.urlopen(url, timeout=10) as resp:
-            return resp.read().decode("utf-8")
-    except (urllib_error.URLError, OSError) as exc:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return None
+        return resp.text
+    except requests.exceptions.RequestException as exc:
         warnings.warn(f"[pathways] KEGG request failed ({url}): {exc}")
         return None
 
@@ -95,3 +106,69 @@ def get_kegg_pathways(gene: str) -> list[dict]:
         })
 
     return pathways[:20]
+
+
+def _ensure_gene_symbols() -> dict[str, str]:
+    """Fetch and cache KEGG ID -> primary symbol for every human gene (one bulk request)."""
+    global _ALL_GENE_SYMBOLS
+    if _ALL_GENE_SYMBOLS is not None:
+        return _ALL_GENE_SYMBOLS
+
+    text = _kegg_get("list/hsa")
+    symbols: dict[str, str] = {}
+    if text:
+        for line in text.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            kid  = parts[0].strip()          # "hsa:1956"
+            desc = parts[3]                  # "EGFR, ERBB, ...; epidermal growth factor receptor..."
+            symbol = desc.split(";")[0].split(",")[0].strip()
+            if symbol:
+                symbols[kid] = symbol
+    _ALL_GENE_SYMBOLS = symbols
+    return symbols
+
+
+def get_genes_in_pathway(pathway_id: str, max_genes: int = 200) -> list[str]:
+    """
+    Given a KEGG pathway ID (e.g. 'hsa04012'), return the gene symbols
+    that are members of that pathway.
+
+    Reverse of get_kegg_pathways(): that goes gene -> pathways, this goes
+    pathway -> genes. Together they let a caller do a 2-hop
+    gene -> pathway -> gene graph traversal.
+
+    max_genes is a generous safety cap, not a rate-limit workaround: gene
+    ID -> symbol resolution comes from one cached bulk lookup
+    (_ensure_gene_symbols), so a full pathway (up to a few hundred genes)
+    resolves in one additional request, not one request per gene.
+    """
+    symbol_map = _ensure_gene_symbols()
+
+    text = _kegg_get(f"link/hsa/{pathway_id}")
+    if not text:
+        return []
+
+    # Each line: "path:hsa04012\thsa:1956"
+    kegg_gene_ids: list[str] = []
+    for line in text.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2:
+            kegg_gene_ids.append(parts[1].strip())
+
+    gene_symbols: list[str] = []
+    for kid in kegg_gene_ids:
+        symbol = symbol_map.get(kid)
+        if symbol:
+            gene_symbols.append(symbol)
+        if len(gene_symbols) >= max_genes:
+            break
+
+    return gene_symbols
+
+
+def get_cached_pathway_genes(pathway_id: str) -> list[str]:
+    if pathway_id not in _PATHWAY_GENES_CACHE:
+        _PATHWAY_GENES_CACHE[pathway_id] = get_genes_in_pathway(pathway_id)
+    return _PATHWAY_GENES_CACHE[pathway_id]

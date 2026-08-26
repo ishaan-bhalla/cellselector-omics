@@ -1,0 +1,16 @@
+pandas
+pyarrow
+numpy
+python-dotenv
+jupyter
+tqdm
+biopython
+scipy
+ollama
+requests
+networkx
+neo4j
+fastapi
+uvicorn
+pydantic
+neo4j
