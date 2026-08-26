@@ -1,13 +1,89 @@
 from pathlib import Path
 import hashlib
 import json
+import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from config import OUTPUTS_DIR
+from config import MASTER_MERGED, OUTPUTS_DIR
 from models.classical.ranker import rank
+from models.classical.similarity import find_alternatives
 from models.agentic.retriever import format_context, retrieve_evidence
-from models.agentic.generator import generate_comparison, generate_justification
+from models.agentic.generator import (
+    add_citations_to_justification,
+    generate_comparison,
+    generate_justification,
+)
+
+
+def _parse_justification(text: str) -> dict:
+    """
+    Parse the numbered justification into structured fields.
+
+    Sections 1-5 are LLM-generated prose extracted as strings.
+    Sections 6 (DATA SOURCES) and 7 (LITERATURE) are appended by
+    add_citations_to_justification() and parsed into lists.
+    """
+    key_map = {
+        "1": "recommendation",
+        "2": "key_reason",
+        "3": "evidence_summary",
+        "4": "trade_offs",
+        "5": "best_for",
+    }
+    sections: dict = {v: "" for v in key_map.values()}
+    sections["data_citations"]      = []
+    sections["literature_citations"] = []
+
+    pattern = re.compile(r"^\s*(\d)\.\s+[A-Z][A-Z\s\-]+:\s*(.*)", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+
+    raw: dict[str, str] = {}
+    for idx, m in enumerate(matches):
+        num        = m.group(1)
+        first_line = m.group(2).strip()
+        start = m.end()
+        end   = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        continuation = text[start:end].strip()
+        content = (first_line + (" " + continuation if continuation else "")).strip()
+        if num in key_map:
+            sections[key_map[num]] = content
+        else:
+            raw[num] = content
+
+    # Section 6: DATA SOURCES → list of "[D1] ..." strings
+    raw6 = raw.get("6", "")
+    if raw6:
+        markers = re.findall(r'\[D\d+\]', raw6)
+        entries = re.split(r'\[D\d+\]', raw6)
+        for marker, entry in zip(markers, entries[1:]):
+            sections["data_citations"].append(f"{marker} {entry.strip()}")
+
+    # Section 7: LITERATURE → list of "[P1] ..." strings
+    raw7 = raw.get("7", "")
+    if raw7:
+        markers = re.findall(r'\[P\d+\]', raw7)
+        entries = re.split(r'\[P\d+\]', raw7)
+        for marker, entry in zip(markers, entries[1:]):
+            sections["literature_citations"].append(f"{marker} {entry.strip()}")
+
+    return sections
+
+
+def _verification_notes(evidence: dict) -> list[str]:
+    """Derive data-quality caveats from evidence dict."""
+    notes = []
+    if not evidence.get("hpa_expression") and not evidence.get("depmap_expression"):
+        notes.append("No primary RNA expression data available")
+    if evidence.get("scores", {}).get("geo_confirmation", 0) < 0:
+        notes.append("GEO data contradicts primary RNA sources — treat with caution")
+    if not evidence.get("proteomics"):
+        notes.append("No proteomics data available for this cell line")
+    if not evidence.get("geo_expression"):
+        notes.append("No GEO validation data found")
+    if not evidence.get("literature"):
+        notes.append("No PubMed literature found for this gene/cell-line pair")
+    return notes
 
 
 def run(
@@ -21,10 +97,11 @@ def run(
     """
     Full agentic ranking pipeline:
       1. Classical rank → top_n results (or all if target_cellosaurus_id is set)
-      2. Apply exclusion-gene penalties (mirrors classical endpoint behaviour)
-      3. For each: retrieve evidence, format context, generate LLM justification
-      4. Generate LLM comparative summary (skipped when targeting a single cell line)
-      5. Save to outputs/agentic_results_{gene}_{hash}.json
+         exclude_genes penalties are applied inside rank() itself.
+      2. Filter to target cell line if target_cellosaurus_id is set.
+      3. For each: retrieve evidence, format context, generate LLM justification.
+      4. Generate LLM comparative summary (skipped when targeting a single cell line).
+      5. Save to outputs/agentic_results_{gene}_{hash}.json.
 
     Returns the full structured output dict.
     """
@@ -39,20 +116,8 @@ def run(
     # target is always present in the results before we filter down to it.
     rank_top_n = None if target_cellosaurus_id else top_n
     ranked = rank(gene, disease_filter=disease_filter,
-                  lineage_filter=lineage_filter, top_n=rank_top_n)
-
-    # ── Step 1b: Exclusion-gene penalties ────────────────────────────────────
-    if ranked is not None and exclude_genes:
-        from models.classical.scorer import load_mappings, score_rna_expression
-        hpa_to_cvcl, _, gsm_to_cvcl = load_mappings()
-        ranked = ranked.copy()
-        for excl_gene in exclude_genes:
-            excl_rna = score_rna_expression(excl_gene, hpa_to_cvcl, gsm_to_cvcl)
-            cvcl_map = dict(zip(excl_rna["cellosaurus_id"], excl_rna["rna_score"]))
-            col = f"_excl_{excl_gene}"
-            ranked[col] = ranked["cellosaurus_id"].map(lambda c: float(cvcl_map.get(c, 0.0)))
-            ranked["final_score"] = (ranked["final_score"] * (1 - ranked[col] * 0.5)).clip(0.0, 1.0)
-        ranked = ranked.sort_values("final_score", ascending=False)
+                  lineage_filter=lineage_filter, top_n=rank_top_n,
+                  exclude_genes=exclude_genes)
 
     if ranked is not None and target_cellosaurus_id:
         filtered = ranked[ranked["cellosaurus_id"] == target_cellosaurus_id]
@@ -64,6 +129,18 @@ def run(
     if ranked is None or len(ranked) == 0:
         print(f"[pipeline] No results for gene: {gene}")
         return {"gene": gene, "results": [], "comparative_summary": ""}
+
+    # ── Compute similarity-based alternatives (once, for all ranked lines) ────
+    print("[pipeline] Computing similarity alternatives...")
+    try:
+        alternatives_map = find_alternatives(
+            gene, ranked, MASTER_MERGED, top_k=3,
+            disease_filter=disease_filter,
+            lineage_filter=lineage_filter,
+        )
+    except Exception as exc:
+        print(f"  [warning] similarity failed: {exc}")
+        alternatives_map = {}
 
     # ── Steps 2a–c: Per-result evidence + LLM justification ──────────────────
     results: list[dict] = []
@@ -80,8 +157,26 @@ def run(
         evidence = retrieve_evidence(gene, cvcl, row)
         evidence_list.append(evidence)
 
-        # 2b: Format context for LLM
+        # 2b: Format context for LLM; append exclusion warnings when relevant
         context_str = format_context(gene, evidence)
+
+        exclusion_info = {"excluded_genes": exclude_genes or [], "warnings": []}
+        if exclude_genes:
+            excl_lines = []
+            for excl_gene in exclude_genes:
+                score = float(row.get(f"excluded_{excl_gene}_score", 0) or 0)
+                if score > 0.5:
+                    msg = (
+                        f"EXCLUSION WARNING: This cell line also expresses "
+                        f"{excl_gene} (score={score:.2f}) which was requested "
+                        f"to be excluded. This may confound experimental results."
+                    )
+                    excl_lines.append(msg)
+                    exclusion_info["warnings"].append(
+                        f"{excl_gene} expressed at score {score:.2f} — may confound results"
+                    )
+            if excl_lines:
+                context_str += "\n\n" + "\n".join(excl_lines)
 
         # 2c: Generate LLM justification
         try:
@@ -93,10 +188,16 @@ def run(
             print(f"  [warning] LLM error: {exc}")
             justification = f"LLM unavailable: {exc}"
 
+        justification = add_citations_to_justification(
+            justification,
+            evidence.get("dataset_citations", []),
+            evidence.get("literature", []),
+        )
+
         results.append({
-            "rank":           rank_pos + 1,
-            "cellosaurus_id": cvcl,
-            "official_name":  name,
+            "rank":                rank_pos + 1,
+            "cellosaurus_id":      cvcl,
+            "official_name":       name,
             "scores": {
                 "final_score":      final_score,
                 "rna_score":        float(row.get("rna_score") or 0),
@@ -107,6 +208,8 @@ def run(
             },
             "evidence":       evidence,
             "justification":  justification,
+            "exclusion_info": exclusion_info,
+            "alternatives":   alternatives_map.get(cvcl, []),
         })
 
     # ── Step 3: Comparative summary (skipped for single-target queries) ───────

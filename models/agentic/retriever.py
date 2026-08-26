@@ -7,11 +7,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import (
     CELL_LINE_LOOKUP,
+    DATASET_CITATIONS,
     GEO_INFO,
     MASTER_MERGED,
     PARQUET_DIR,
     SAMPLE_INFO,
 )
+from models.agentic.pubmed import format_citations, get_cell_line_literature
 
 
 def retrieve_evidence(
@@ -161,15 +163,37 @@ def retrieve_evidence(
         "final_score":      _f("final_score"),
     }
 
+    # ── 7. PubMed literature ─────────────────────────────────────────────────
+    cell_line_name = str(top_result_df_row.get("official_name") or cellosaurus_id)
+    disease_str    = str(top_result_df_row.get("disease") or "") or None
+    papers = get_cell_line_literature(gene, cell_line_name, disease_str)
+
+    # ── 8. Dataset citations ──────────────────────────────────────────────────
+    # Attach a citation for each data source that contributed evidence for
+    # this cell line. Cellosaurus is always included as the ID spine.
+    dataset_cites: list[dict] = []
+    if hpa_evidence:
+        dataset_cites.append(DATASET_CITATIONS["HPA_RNA"])
+    if dep_evidence:
+        dataset_cites.append(DATASET_CITATIONS["DepMap_TPM"])
+    if geo_evidence:
+        dataset_cites.append(DATASET_CITATIONS["GEO_expression"])
+    if prot_evidence:
+        dataset_cites.append(DATASET_CITATIONS["CCLE_proteomics"])
+    dataset_cites.append(DATASET_CITATIONS["Cellosaurus"])
+
     return {
-        "gene":              gene,
-        "cellosaurus_id":    cellosaurus_id,
-        "hpa_expression":    hpa_evidence,
-        "depmap_expression": dep_evidence,
-        "geo_expression":    geo_evidence,
-        "proteomics":        prot_evidence,
-        "metadata":          metadata,
-        "scores":            scores,
+        "gene":                  gene,
+        "cellosaurus_id":        cellosaurus_id,
+        "hpa_expression":        hpa_evidence,
+        "depmap_expression":     dep_evidence,
+        "geo_expression":        geo_evidence,
+        "proteomics":            prot_evidence,
+        "metadata":              metadata,
+        "scores":                scores,
+        "literature":            papers,
+        "literature_formatted":  format_citations(papers),
+        "dataset_citations":     dataset_cites,
     }
 
 
@@ -221,6 +245,8 @@ def format_context(gene: str, evidence: dict) -> str:
         "no GEO data (neutral)"
     )
 
+    lit_formatted = evidence.get("literature_formatted", "SUPPORTING LITERATURE:\n  (no relevant papers found)")
+
     return f"""CELL LINE: {meta['official_name']} ({evidence['cellosaurus_id']})
 GENE QUERIED: {gene}
 
@@ -246,4 +272,8 @@ SCORES:
 - Data quality score:   {scores['quality_score']:.2f}
 - Context score:        {scores['context_score']:.2f}
 - GEO confirmation:     {scores['geo_confirmation']:+.2f}
-- Final fit score:      {scores['final_score']:.2f}"""
+- Final fit score:      {scores['final_score']:.2f}
+
+{lit_formatted}
+
+Use these papers to support your justification where relevant. Cite as [1], [2] etc."""

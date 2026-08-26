@@ -78,6 +78,7 @@ def score_rna_expression(
     gene: str,
     hpa_to_cvcl: dict,
     gsm_to_cvcl: dict,
+    gene_class: str | None = None,
 ) -> pd.DataFrame:
     """
     Score RNA expression for a gene across all cell lines.
@@ -85,6 +86,14 @@ def score_rna_expression(
     HPA + DepMap are the primary sources (equal weight when both present).
     GEO acts as a confirmation signal only (±0.10 additive bonus, not mixed
     into the percentile ranking).
+
+    gene_class controls the RNA scoring strategy:
+      - "tissue_specific" / None  →  rna_score = mean(hpa_rank, depmap_rank)
+      - "ubiquitous"              →  rna_score = 1 - CV(hpa_rank, depmap_rank)
+                                      where CV = |h-d| / (h+d)
+                                      (consistency beats expression level)
+      - "loss_of_function"        →  same as tissue_specific
+                                      (caller adds LOF flag in the result)
 
     Returns columns:
         cellosaurus_id, rna_score, hpa_score, depmap_score,
@@ -174,17 +183,28 @@ def score_rna_expression(
         .merge(dep_df, on="cellosaurus_id", how="left")
     )
 
-    # Equal-weight combination; falls back to single source if only one present
+    # Combine HPA and DepMap; strategy depends on gene_class
     def _rna(row):
         h, d = row["hpa_score"], row["depmap_score"]
         has_h, has_d = pd.notna(h), pd.notna(d)
-        if has_h and has_d:
-            return 0.5 * h + 0.5 * d, 2, False
-        elif has_h:
-            return h, 1, False
-        elif has_d:
-            return d, 1, False
-        return 0.0, 0, True  # flagged: no primary data
+        if gene_class == "ubiquitous":
+            if has_h and has_d:
+                # Cross-source consistency: 1 - |h-d|/(h+d)
+                denom = float(h) + float(d)
+                cv = abs(float(h) - float(d)) / denom if denom > 0 else 0.0
+                return 1.0 - cv, 2, False
+            elif has_h or has_d:
+                return 0.5, 1, False   # neutral: can't assess consistency
+            return 0.0, 0, True
+        else:
+            # tissue_specific and loss_of_function: percentile-rank average
+            if has_h and has_d:
+                return 0.5 * float(h) + 0.5 * float(d), 2, False
+            elif has_h:
+                return float(h), 1, False
+            elif has_d:
+                return float(d), 1, False
+            return 0.0, 0, True   # flagged: no primary data
 
     tmp = result.apply(_rna, axis=1, result_type="expand")
     result["rna_score"]         = tmp[0]

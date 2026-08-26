@@ -28,6 +28,9 @@ def rank(
     weights: dict | None = None,
     use_learned_weights: bool = True,
     expression_threshold: bool = True,
+    exclude_genes: list[str] | None = None,
+    include_alternatives: bool = False,
+    alternatives_top_k: int = 3,
 ) -> pd.DataFrame:
     """
     Rank cell lines by suitability for studying a given gene.
@@ -39,11 +42,19 @@ def rank(
       + weights["context"] * context_score
       + geo_confirmation_bonus  (additive ±0.10, not weighted)
 
+    exclude_genes: optional list of gene symbols whose expression should
+        penalise the final score. For each excluded gene, an expression score
+        is computed and applied as:
+            final_score *= (1 - excluded_rna_score * 0.5)
+        Columns added: excluded_{g}_score, excluded_{g}_flag (score > 0.5),
+        exclusion_warning (True if any flag is set).
+
     Returns columns:
         cellosaurus_id, official_name, final_score,
         rna_score, protein_score, quality_score, context_score,
         geo_confirmation, n_sources, disease, lineage,
-        hpa_score, depmap_score, missing_data_flag
+        hpa_score, depmap_score, missing_data_flag,
+        exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
     if weights is None:
         if use_learned_weights:
@@ -53,8 +64,10 @@ def rank(
             weights = FIXED_WEIGHTS
 
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
+    gene_class = classify_gene(gene)
 
-    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
+    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl,
+                                      gene_class=gene_class)
     protein_df = score_protein_expression(gene, ach_to_cvcl)
 
     all_cvcl = set(rna_df["cellosaurus_id"]) | set(protein_df["cellosaurus_id"])
@@ -90,6 +103,24 @@ def rank(
     result["final_score"] = result["final_score"].clip(0.0, 1.0)
     result["gene_class"] = classify_gene(gene)
 
+    # ── Exclusion-gene penalties ──────────────────────────────────────────────
+    if exclude_genes:
+        for excl_gene in exclude_genes:
+            excl_rna = score_rna_expression(excl_gene, hpa_to_cvcl, gsm_to_cvcl)
+            cvcl_map = dict(zip(excl_rna["cellosaurus_id"], excl_rna["rna_score"]))
+            score_col = f"excluded_{excl_gene}_score"
+            flag_col  = f"excluded_{excl_gene}_flag"
+            result[score_col] = result["cellosaurus_id"].map(
+                lambda c: float(cvcl_map.get(c, 0.0))
+            )
+            result["final_score"] = (
+                result["final_score"] * (1 - result[score_col] * 0.5)
+            ).clip(0.0, 1.0)
+            result[flag_col] = result[score_col] > 0.5
+        result["exclusion_warning"] = result[
+            [f"excluded_{g}_flag" for g in exclude_genes]
+        ].any(axis=1)
+
     if disease_filter or lineage_filter:
         result = result[result["context_score"] > 0]
 
@@ -100,13 +131,36 @@ def rank(
     if top_n is not None:
         result = result.head(top_n)
 
+    result["gene_class"] = gene_class
+
     out_cols = [
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
         "geo_confirmation", "n_sources", "disease", "lineage",
         "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
     ]
-    return result[out_cols].reset_index(drop=True)
+    if exclude_genes:
+        out_cols.append("exclusion_warning")
+        for g in exclude_genes:
+            out_cols.extend([f"excluded_{g}_score", f"excluded_{g}_flag"])
+
+    result = result[out_cols].reset_index(drop=True)
+
+    if include_alternatives:
+        # Lazy import avoids circular dependency (ranker ↔ similarity)
+        from models.classical.similarity import find_alternatives
+        from config import MASTER_MERGED
+        alts = find_alternatives(
+            gene, result, MASTER_MERGED,
+            top_k=alternatives_top_k,
+            disease_filter=disease_filter,
+            lineage_filter=lineage_filter,
+        )
+        result["alternatives"] = result["cellosaurus_id"].map(
+            lambda cvcl: alts.get(cvcl, [])
+        )
+
+    return result
 
 
 def explain(row) -> str:
@@ -117,27 +171,11 @@ def explain(row) -> str:
         else row.get("cellosaurus_id", "Unknown")
     )
 
-    rna   = float(row.get("rna_score") or 0)
-    n     = int(row.get("n_sources") or 0)
-    geo_c = float(row.get("geo_confirmation") or 0)
-
-    if rna > 0.8:
-        expr_desc = "strongly"
-    elif rna > 0.5:
-        expr_desc = "moderately"
-    elif rna > 0:
-        expr_desc = "weakly"
-    else:
-        expr_desc = "not detectably (no primary RNA data)"
-
-    # Cross-source consistency from available hpa/depmap scores
-    hpa_s  = row.get("hpa_score")
-    dep_s  = row.get("depmap_score")
-    avail  = [float(v) for v in [hpa_s, dep_s] if pd.notna(v)]
-    consistency = "high" if len(avail) < 2 else (
-        "high" if abs(avail[0] - avail[1]) < 0.15 else
-        "moderate" if abs(avail[0] - avail[1]) < 0.35 else "low"
-    )
+    gene       = row.get("gene") or ""
+    gene_class = row.get("gene_class") or "tissue_specific"
+    rna        = float(row.get("rna_score") or 0)
+    n          = int(row.get("n_sources") or 0)
+    geo_c      = float(row.get("geo_confirmation") or 0)
 
     geo_str = ""
     if geo_c > 0:
@@ -158,8 +196,51 @@ def explain(row) -> str:
 
     confidence_pct = int(round(float(row.get("final_score") or 0) * 100))
 
-    return (
-        f"{name} expresses the target gene {expr_desc} (RNA score {rna:.2f}) "
-        f"confirmed across {n} of 2 primary RNA sources with {consistency} "
-        f"consistency.{geo_str}{context_str} Overall confidence: {confidence_pct}%"
-    )
+    if gene_class == "ubiquitous":
+        # RNA score represents cross-source consistency, not expression level
+        if rna > 0.85:
+            cons_desc = "very high"
+        elif rna > 0.65:
+            cons_desc = "good"
+        elif rna > 0.4:
+            cons_desc = "moderate"
+        else:
+            cons_desc = "low"
+        core = (
+            f"{name} shows {cons_desc} cross-source consistency for this "
+            f"broadly-expressed gene (consistency score {rna:.2f} across "
+            f"{n} of 2 primary RNA sources)."
+        )
+    else:
+        # tissue_specific and loss_of_function: expression-level description
+        if rna > 0.8:
+            expr_desc = "strongly"
+        elif rna > 0.5:
+            expr_desc = "moderately"
+        elif rna > 0:
+            expr_desc = "weakly"
+        else:
+            expr_desc = "not detectably (no primary RNA data)"
+
+        hpa_s = row.get("hpa_score")
+        dep_s = row.get("depmap_score")
+        avail = [float(v) for v in [hpa_s, dep_s] if pd.notna(v)]
+        consistency = "high" if len(avail) < 2 else (
+            "high" if abs(avail[0] - avail[1]) < 0.15 else
+            "moderate" if abs(avail[0] - avail[1]) < 0.35 else "low"
+        )
+        core = (
+            f"{name} expresses the target gene {expr_desc} (RNA score {rna:.2f}) "
+            f"confirmed across {n} of 2 primary RNA sources with {consistency} consistency."
+        )
+
+    lof_note = ""
+    if gene_class == "loss_of_function":
+        gene_label = gene if gene else "this gene"
+        lof_note = (
+            f" Note: {gene_label} is typically studied via loss-of-function. "
+            f"These results show lines with HIGH expression (useful as controls). "
+            f"Lines with known {gene_label} mutations may be more relevant for LOF studies."
+        )
+
+    return f"{core}{geo_str}{context_str}{lof_note} Overall confidence: {confidence_pct}%"

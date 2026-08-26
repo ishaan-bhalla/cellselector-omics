@@ -8,11 +8,11 @@ st.set_page_config(page_title="CellLineFinder", page_icon="🧬", layout="center
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap');
 #MainMenu,footer,header{visibility:hidden;}
 .stApp{background:#F1F5F9;}
 .block-container{padding-top:2rem;max-width:900px;}
-*{font-family:'Inter',sans-serif;}
+*{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','Helvetica Neue',Helvetica,Arial,sans-serif;}
 .head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #E2E8F0;padding-bottom:1.3rem;margin-bottom:1.3rem;}
 .bt h1{font-size:1.4rem;font-weight:700;color:#0F172A;letter-spacing:-0.3px;margin:0;}
 .bt p{font-size:0.82rem;color:#64748B;font-weight:400;margin:1px 0 0 0;}
@@ -57,8 +57,24 @@ st.markdown("""
 .ev b{color:#334155;font-weight:600;}
 .ev .d{color:#0D9488;font-weight:600;}
 .chip{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#E6F5F3;color:#0F766E;}
+.excl-warn{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:6px;background:#FEF9C3;color:#854D0E;}
+.excl-note{margin-top:0.5rem;padding:0.45rem 0.8rem;background:#FFFBEB;border:1px solid #FDE68A;border-radius:7px;font-size:0.78rem;color:#92400E;}
 .stExpander{border:1px solid #E2E8F0 !important;border-radius:9px !important;background:#F0FDFA !important;margin-top:0.7rem !important;}
 .stExpander summary{font-weight:600 !important;color:#0F766E !important;font-size:0.9rem !important;}
+.alt-row{display:flex;align-items:center;gap:0.7rem;padding:0.45rem 0;border-bottom:1px solid #EEF2F6;}
+.alt-row:last-child{border-bottom:none;}
+.alt-sim{font-family:'IBM Plex Mono';font-size:0.88rem;font-weight:700;color:#0D9488;min-width:38px;}
+.alt-name{font-weight:600;font-size:0.88rem;color:#0F172A;}
+.alt-cid{font-family:'IBM Plex Mono';font-size:0.7rem;color:#94A3B8;margin-left:0.3rem;}
+.alt-chips{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;}
+.alt-chip{font-size:0.64rem;font-weight:600;padding:1px 7px;border-radius:20px;background:#E6F5F3;color:#0F766E;}
+.alt-reason{font-size:0.76rem;color:#64748B;margin-top:2px;}
+
+.stExpander p, .stExpander li, .stExpander span, .stExpander div{color:#0F172A !important;}
+.stExpander strong, .stExpander b{color:#0F766E !important;}
+.stExpander [data-testid="stMarkdownContainer"]{color:#0F172A !important;}
+.stExpander [data-testid="stMarkdownContainer"] *{color:#0F172A !important;}
+.stExpander [data-testid="stMarkdownContainer"] strong{color:#0F766E !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,14 +113,26 @@ def load_justifications(gene):
     just={r.get("cellosaurus_id"):r.get("justification","") for r in data.get("results",[]) if r.get("cellosaurus_id")}
     return just,data.get("comparative_summary","")
 
+def load_alternatives(gene):
+    path=f"outputs/agentic_results_{gene}.json"
+    if not os.path.exists(path): return {}
+    try:
+        with open(path,encoding="utf-8") as f: data=json.load(f)
+    except Exception: return {}
+    return {r.get("cellosaurus_id"):r.get("alternatives",[]) for r in data.get("results",[]) if r.get("cellosaurus_id")}
+
 def parse_query(text):
     dl=text.lower()
     disease=next((w for w in DISEASE_WORDS if w in dl), None)
-    gene=None
+    found=[]
     for tok in re.findall(r"[A-Za-z0-9\-]+", text):
-        if tok.upper() in GENES:
-            gene=tok.upper(); break
-    return gene,disease
+        u=tok.upper()
+        if u in GENES and u not in found:
+            found.append(u)
+        if len(found)>=2: break
+    gene = found[0] if found else None
+    gene2 = found[1] if len(found)>1 else None
+    return gene, gene2, disease
 
 @st.cache_data
 def score_source(path, gene, which):
@@ -119,7 +147,19 @@ def score_source(path, gene, which):
     per=per.dropna(subset=["cellosaurus_id"])
     return per.groupby("cellosaurus_id")["score"].max().reset_index()
 
-def recommend(gene, disease_filter=None, top_n=10):
+def _excl_rna_score(excl_gene):
+    """HPA + DepMap averaged expression score for an exclusion gene (returns 0-1)."""
+    parts=[]
+    for path,which in [(PQ+"gene_expr_hpa_preprocessed.parquet","hpa"),(PQ+"gene_expr_depmap_preprocessed.parquet","depmap")]:
+        s=score_source(path,excl_gene,which)
+        if s is not None: parts.append(s.rename(columns={"score":which}))
+    if not parts: return None
+    merged=reduce(lambda a,b:a.merge(b,on="cellosaurus_id",how="outer"),parts)
+    cols=[c for c in ["hpa","depmap"] if c in merged.columns]
+    merged["excl_score"]=merged[cols].mean(axis=1,skipna=True).fillna(0.0)
+    return merged[["cellosaurus_id","excl_score"]]
+
+def recommend(gene, disease_filter=None, top_n=10, exclude_genes=None):
     parts={}
     for path,which in [(PQ+"gene_expr_hpa_preprocessed.parquet","hpa"),(PQ+"gene_expr_depmap_preprocessed.parquet","depmap"),(PQ+"gene_expr_geo_preprocessed.parquet","geo"),(PQ+"gene_expr_ccle_proteomics_preprocessed.parquet","prot")]:
         s=score_source(path,gene,which)
@@ -137,7 +177,38 @@ def recommend(gene, disease_filter=None, top_n=10):
         mask=r["disease"].fillna("").str.lower().str.contains(disease_filter.lower())|r["lineage"].fillna("").str.lower().str.contains(disease_filter.lower())
         r=r[mask]
     r["final_score"]=r["expr_score"]*r["confidence"]
+    # Exclusion gene penalties: final_score *= (1 - excl_rna_score * 0.5)
+    if exclude_genes:
+        for eg in exclude_genes:
+            excl_df=_excl_rna_score(eg)
+            ecol=f"excl_{eg}"
+            if excl_df is not None:
+                r=r.merge(excl_df.rename(columns={"excl_score":ecol}),on="cellosaurus_id",how="left")
+            if ecol not in r.columns: r[ecol]=0.0
+            else: r[ecol]=r[ecol].fillna(0.0)
+            r[f"excl_{eg}_flag"]=r[ecol]>0.5
+            r["final_score"]=(r["final_score"]*(1.0-r[ecol]*0.5)).clip(0.0,1.0)
+        r["exclusion_warning"]=r[[f"excl_{g}_flag" for g in exclude_genes]].any(axis=1)
+    else:
+        r["exclusion_warning"]=False
     return r.sort_values("final_score",ascending=False).head(top_n),len(r)
+
+
+
+def recommend_two(geneA, geneB, disease_filter=None, top_n=10):
+    rA, _ = recommend(geneA, disease_filter, top_n=100000)
+    rB, _ = recommend(geneB, disease_filter, top_n=100000)
+    if rA is None or rB is None or len(rA)==0 or len(rB)==0:
+        return None, 0
+    a = rA[["cellosaurus_id","official_name","expr_score","confidence","disease","lineage","n_sources","evidence_count","has_mutations","has_fusions"]].rename(columns={"expr_score":"scoreA"})
+    b = rB[["cellosaurus_id","scoreA"]].rename(columns={"scoreA":"scoreB"}) if False else rB[["cellosaurus_id","expr_score"]].rename(columns={"expr_score":"scoreB"})
+    m = a.merge(b, on="cellosaurus_id", how="inner")
+    if len(m)==0:
+        return None, 0
+    m["expr_score"] = (m["scoreA"] + m["scoreB"]) / 2
+    m["final_score"] = m["expr_score"] * m["confidence"]
+    m = m.sort_values("final_score", ascending=False)
+    return m.head(top_n), len(m)
 
 @st.cache_data
 def load_all():
@@ -149,7 +220,7 @@ def load_all():
     return d.rename(columns={"official_name":"Cell line","cellosaurus_id":"Cellosaurus ID","confidence":"Confidence","evidence_count":"Evidence","disease":"Disease","lineage":"Lineage","has_hpa_expr":"HPA","has_depmap_expr":"DepMap","has_geo_expr":"GEO","has_proteomics":"Proteomics","has_mutations":"Mutations","has_fusions":"Fusions"})
 
 # ---------- Header ----------
-st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLineFinder</h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
+st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLine<span>Finder</span></h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
 
 # ---------- Navigation ----------
 st.markdown("""
@@ -168,21 +239,36 @@ if st.session_state.page=="Search":
     sc1,sc2=st.columns([4,1])
     query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
     sc2.button("Find", key="do_search", use_container_width=True, type="primary")
+    st.markdown('<p style="font-size:0.82rem;color:#64748B;margin:0.6rem 0 0.2rem 0;"><b style="color:#0F172A;">Exclude genes</b> (optional) - leave out cell lines that also strongly express these genes, useful for studying your target gene in isolation</p>', unsafe_allow_html=True)
+    excl_raw=st.text_input("excl", placeholder="e.g. TP53, MYC", label_visibility="collapsed").strip()
+    exclude_genes=[g.strip().upper() for g in excl_raw.split(",") if g.strip()] if excl_raw else []
     if query:
-        gene,disease=parse_query(query)
+        gene,gene2,disease=parse_query(query)
         if gene is None:
             st.warning("No recognised gene found. Try a gene symbol such as EGFR or TP53.")
         else:
-            st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+'</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="parsed">Detected gene <b>{gene}</b>'+(f' &middot; tissue <b>{disease}</b>' if disease else '')+(f' &middot; excluding <b>{", ".join(exclude_genes)}</b>' if exclude_genes else '')+'</p>', unsafe_allow_html=True)
             JUST,SUMMARY=load_justifications(gene)
-            r,total=recommend(gene,disease)
+            ALTS=load_alternatives(gene)
+            r,total=recommend(gene,disease,exclude_genes=exclude_genes)
+            if not JUST and r is not None and len(r)>0:
+                st.info("No AI explanations saved for this gene yet.")
+                if st.button(f"Generate AI explanations for {gene}", key="gen_ai"):
+                    with st.spinner(f"Generating AI explanations for {gene} (this takes a moment)..."):
+                        try:
+                            from models.agentic.pipeline import run as _run_ai
+                            _run_ai(gene, disease_filter=disease, top_n=10)
+                            st.success("Done. Reloading...")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not generate: {e}. Make sure Ollama is running.")
             if r is None or len(r)==0:
                 st.warning(f"No results for {gene}"+(f" in {disease}" if disease else "")+".")
             else:
                 ctx=f" in <b>{disease}</b>" if disease else ""
                 st.markdown(f'<div class="resbar">Showing top {len(r)} of <b>{total}</b> cell lines for {gene}{ctx}</div>', unsafe_allow_html=True)
                 if SUMMARY:
-                    st.markdown('<div class="summary"><div class="st">AI comparative summary</div>'+SUMMARY.replace(chr(10),"<br>")+'</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="summary"><div class="st">AI overview - comparing the top cells</div>'+SUMMARY.replace(chr(10),"<br>")+'</div>', unsafe_allow_html=True)
                 for i,(_,row) in enumerate(r.iterrows(),1):
                     strength="strongly" if row["expr_score"]>=0.5 else "moderately"
                     has_mut=bool(row.get("has_mutations",False)); has_fus=bool(row.get("has_fusions",False))
@@ -194,6 +280,17 @@ if st.session_state.page=="Search":
                         else: lvl,cls="Low","low"
                         return f'<div class="cbox"><div class="cn">{label}</div><div class="cl {cls}">{lvl}</div></div>'
                     breakdown=contrib("HPA RNA","hpa")+contrib("DepMap","depmap")+contrib("GEO","geo")+contrib("Proteomics","prot")
+                    excl_warn=bool(row.get("exclusion_warning",False))
+                    excl_badge='<span class="excl-warn">⚠ excludes: '+", ".join(exclude_genes)+'</span>' if excl_warn else ''
+                    excl_detail=""
+                    if excl_warn and exclude_genes:
+                        parts_excl=[]
+                        for eg in exclude_genes:
+                            sc=row.get(f"excl_{eg}",None)
+                            if sc is not None and sc>0.5:
+                                parts_excl.append(f"{eg} ({sc:.2f})")
+                        if parts_excl:
+                            excl_detail=f'<div class="excl-note">⚠ Also expresses: {", ".join(parts_excl)} — may confound {gene} experiments</div>'
                     chips='<span class="chip">complete model</span>' if (has_mut and has_fus) else ''
                     evc=int(row["evidence_count"]) if "evidence_count" in row and pd.notna(row["evidence_count"]) else 0
                     dis=row.get("disease") or ""; lin=row.get("lineage") or ""
@@ -207,21 +304,40 @@ if st.session_state.page=="Search":
                     if has_fus: evp.append("fusion reported")
                     ev='<div class="ev"><b>Evidence:</b> '+" &middot; ".join(evp)+f'. Backed by {evc} of 3 nomenclature sources.{chips}</div>'
                     cc="card top" if i<=3 else "card"; rc="rank hi" if i<=3 else "rank"
-                    st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span></div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="{cc}"><div class="crow"><span class="{rc}">{i:02d}</span><div><span class="name">{row["official_name"]}</span> <span class="cid">{row["cellosaurus_id"]}</span>{excl_badge}</div><div class="score"><div class="n">{row["final_score"]:.2f}</div><div class="l">Fit score</div></div></div><div class="metrics"><div class="m"><div class="v teal">{row["expr_score"]:.2f}</div><div class="k">Expression</div></div><div class="m"><div class="v">{row["confidence"]:.0%}</div><div class="k">Confidence</div></div><div class="m"><div class="v">{int(row["n_sources"])}/4</div><div class="k">Sources</div></div><div class="m"><div class="v">{evc}/3</div><div class="k">Evidence</div></div></div><div class="contrib">{breakdown}</div>{ev}{excl_detail}</div>', unsafe_allow_html=True)
                     jtext=JUST.get(row["cellosaurus_id"],"")
-                    if jtext:
-                        with st.expander("AI explanation"):
+                    if jtext and jtext.strip() and "RECOMMENDATION" in jtext.upper():
+                        with st.expander("Why this cell? (AI explanation)"):
+                            shown=False
                             for line in jtext.split(chr(10)):
                                 line=line.strip()
                                 if not line: continue
-                                matched=False
+                                printed=False
                                 for lbl in ["RECOMMENDATION","KEY REASON","EVIDENCE SUMMARY","TRADE-OFFS","BEST FOR"]:
                                     if lbl in line.upper():
                                         txt=line.split(":",1)[-1].strip()
-                                        st.markdown(f"**{lbl.title()}:** {txt}")
-                                        matched=True; break
-                                if not matched:
-                                    st.markdown(line)
+                                        if txt:
+                                            st.markdown(f"**{lbl.title()}:** {txt}")
+                                            shown=True
+                                        printed=True; break
+                                if not printed and len(line)>3:
+                                    st.markdown(line); shown=True
+                            if not shown:
+                                st.caption("No detailed explanation available for this cell.")
+                    row_alts=ALTS.get(row["cellosaurus_id"],[])
+                    if row_alts:
+                        with st.expander(f"Similar alternatives ({len(row_alts)})"):
+                            st.caption("Cell lines with the most similar multi-omics profile — useful as experimental backups or orthogonal validation.")
+                            rows_html=""
+                            for alt in row_alts:
+                                sim=alt.get("similarity_score",0)
+                                aname=alt.get("official_name",alt.get("cellosaurus_id",""))
+                                acid=alt.get("cellosaurus_id","")
+                                shared=alt.get("shared_data_types",[])
+                                reason=alt.get("similarity_reason","")
+                                chips="".join(f'<span class="alt-chip">{dt}</span>' for dt in shared[:4])
+                                rows_html+=f'<div class="alt-row"><span class="alt-sim">{sim:.2f}</span><div><span class="alt-name">{aname}</span><span class="alt-cid">{acid}</span><div class="alt-reason">{reason}</div></div><div class="alt-chips">{chips}</div></div>'
+                            st.markdown(f'<div style="padding:0.2rem 0">{rows_html}</div>', unsafe_allow_html=True)
 
 # ---------- ALL CELL LINES PAGE ----------
 else:
