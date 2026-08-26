@@ -222,13 +222,16 @@ __marimo__/
 # Project data files (keep local, never push)
 data/
 outputs/
-*.csv
-*.tsv
-*.txt
-*.parquet
-*.gct
-*.gctx
-*.pkl
-*.xlsx
+data/**/*.csv
+data/**/*.tsv
+data/**/*.txt
+data/**/*.parquet
+data/**/*.gct
+data/**/*.gctx
+data/**/*.pkl
+data/**/*.xlsx
+outputs/**/*.parquet
+outputs/**/*.csv
+outputs/**/*.json
 app/node_modules/
 app/dist/

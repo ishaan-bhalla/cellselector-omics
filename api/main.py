@@ -27,6 +27,11 @@ from models.agentic.growth_properties import get_growth_properties
 from models.classical.ranker import FIXED_WEIGHTS, rank
 from models.classical.scorer import get_gene_role
 from models.classical.similarity import DATASET_CITATIONS, find_alternatives
+from models.graph.queries import (
+    graph_to_json,
+    query_best_cell_lines_via_pathway,
+    query_pathway_neighbor_genes,
+)
 
 # ── Source parquets (gene search) ─────────────────────────────────────────────
 _PARQUET_SOURCES: dict[str, Path] = {
@@ -695,3 +700,66 @@ def stats(request: Request):
         "data_coverage":    coverage,
         "validation":       validation,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Knowledge graph — multi-hop queries over gene/pathway/cell_line nodes,
+# backed by Neo4j (models/graph/ingest.py populates it; see that module's
+# docstring — it's a one-time/periodic ETL, not run per request). Each
+# request is still a network round-trip to Aura, so it still runs off the
+# event loop thread via asyncio.to_thread, matching /recommend/classical.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/graph/explore/{gene}")
+async def explore_graph(gene: str, disease_filter: str = Query(None)):
+    """
+    Full knowledge graph subgraph for a gene as nodes+edges JSON,
+    for visualization.
+
+    disease_filter is accepted but currently ignored — TODO: CellLine nodes
+    now carry disease/lineage (see ingest.py), graph_to_json() just doesn't
+    filter on it yet. query_best_cell_lines_via_pathway() does.
+    """
+    try:
+        result = await asyncio.to_thread(graph_to_json, gene.strip().upper())
+        return _sanitize_for_json(result)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/graph/pathway-neighbors/{gene}")
+async def pathway_neighbors(gene: str):
+    """
+    Genuine 2-hop graph query: genes sharing a pathway with the target gene.
+    """
+    try:
+        result = await asyncio.to_thread(query_pathway_neighbor_genes, gene.strip().upper())
+        return _sanitize_for_json({
+            "gene":      gene.strip().upper(),
+            "neighbors": result,
+            "count":     len(result),
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/graph/cell-lines-via-pathway/{gene}")
+async def cell_lines_via_pathway(
+    gene: str,
+    disease_filter: str = Query(None),
+    top_k: int = Query(5),
+):
+    """
+    Multi-hop query: best cell lines connected to gene directly OR via
+    pathway-neighbor genes, optionally restricted to a disease
+    (case-insensitive substring match against CellLine.disease).
+    """
+    try:
+        result = await asyncio.to_thread(
+            query_best_cell_lines_via_pathway, gene.strip().upper(), disease_filter, top_k
+        )
+        return _sanitize_for_json({
+            "gene":    gene.strip().upper(),
+            "results": result,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

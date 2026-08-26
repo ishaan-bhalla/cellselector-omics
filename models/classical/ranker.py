@@ -11,6 +11,7 @@ from models.classical.scorer import (
     classify_gene,
     load_mappings,
     score_context,
+    score_crispr_dependency,
     score_data_quality,
     score_protein_expression,
     score_rna_expression,
@@ -60,11 +61,18 @@ def rank(
         Columns added: excluded_{g}_score, excluded_{g}_flag (score > 0.5),
         exclusion_warning (True if any flag is set).
 
+    dependency_score / dependency_percentile: CRISPR gene-essentiality signal
+        (DepMap). Answers a different question from expression — how much a
+        cell line NEEDS the gene to survive, not how much it makes of it —
+        so it is attached as an informational column only and never enters
+        the weighted final_score.
+
     Returns columns:
         cellosaurus_id, official_name, final_score,
         rna_score, protein_score, quality_score, context_score,
         geo_confirmation, n_sources, disease, lineage,
         hpa_score, depmap_score, missing_data_flag,
+        dependency_score, dependency_percentile,
         exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
     if weights is None:
@@ -140,11 +148,18 @@ def rank(
 
     result["gene_class"] = gene_class
 
+    # ── CRISPR dependency (essentiality) — additive column, NOT weighted ────
+    # Kept separate from final_score: essentiality and expression answer
+    # different questions, so they must not be blended into one number.
+    crispr_df = score_crispr_dependency(gene)
+    result = result.merge(crispr_df, on="cellosaurus_id", how="left")
+
     out_cols = [
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
         "geo_confirmation", "n_sources", "disease", "lineage",
         "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
+        "dependency_score", "dependency_percentile",
     ]
     if exclude_genes:
         out_cols.append("exclusion_warning")
