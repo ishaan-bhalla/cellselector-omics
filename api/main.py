@@ -23,7 +23,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CELL_LINE_LOOKUP, MASTER_MERGED, OUTPUTS_DIR, PARQUET_DIR
 from api.models import AgenticRequest, ClassicalRequest
+from models.agentic.growth_properties import get_growth_properties
 from models.classical.ranker import FIXED_WEIGHTS, rank
+from models.classical.scorer import get_gene_role
 from models.classical.similarity import DATASET_CITATIONS, find_alternatives
 
 # ── Source parquets (gene search) ─────────────────────────────────────────────
@@ -235,6 +237,8 @@ def _build_classical_result(
         "geo_confirmation":   round(_safe_float(row.get("geo_confirmation")), 4),
         "n_sources":          int(row.get("n_sources") or 0),
         "gene_class":         row.get("gene_class"),
+        "gene_role":          get_gene_role(gene),
+        "growth_properties":  get_growth_properties(cvcl),
         "disease":            str(row.get("disease") or ""),
         "lineage":            str(row.get("lineage") or ""),
         "exclusion_warnings": exclusion_warnings,
@@ -358,6 +362,7 @@ async def recommend_agentic(body: AgenticRequest):
         alts = alts_map.get(cvcl, [])
         results.append({
             **r,
+            "growth_properties": get_growth_properties(cvcl),
             "alternatives": [
                 {
                     "official_name":     a["official_name"],
