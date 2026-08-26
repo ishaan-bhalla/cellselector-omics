@@ -19,6 +19,17 @@ from models.classical.scorer import (
 # Re-export for external consumers (evaluate, weights_learned, etc.)
 __all__ = ["FIXED_WEIGHTS", "rank", "explain"]
 
+_CACHED_LEARNED_WEIGHTS: dict | None = None
+
+
+def _get_learned_weights() -> dict:
+    global _CACHED_LEARNED_WEIGHTS
+    if _CACHED_LEARNED_WEIGHTS is None:
+        from models.classical.weights_learned import optimise_weights
+        print("[ranker] Computing learned weights (one-time, cached)...")
+        _CACHED_LEARNED_WEIGHTS = optimise_weights()
+    return _CACHED_LEARNED_WEIGHTS
+
 
 def rank(
     gene: str,
@@ -57,11 +68,7 @@ def rank(
         exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
     if weights is None:
-        if use_learned_weights:
-            from models.classical.weights_learned import optimise_weights
-            weights = optimise_weights()
-        else:
-            weights = FIXED_WEIGHTS
+        weights = _get_learned_weights() if use_learned_weights else FIXED_WEIGHTS
 
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
     gene_class = classify_gene(gene)
@@ -111,7 +118,7 @@ def rank(
             score_col = f"excluded_{excl_gene}_score"
             flag_col  = f"excluded_{excl_gene}_flag"
             result[score_col] = result["cellosaurus_id"].map(
-                lambda c: float(cvcl_map.get(c, 0.0))
+                lambda c, m=cvcl_map: float(m.get(c, 0.0))
             )
             result["final_score"] = (
                 result["final_score"] * (1 - result[score_col] * 0.5)
