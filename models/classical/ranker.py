@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
 from models.classical.scorer import (
     FIXED_WEIGHTS,
+    _level_label_with_percentile,
     classify_gene,
     load_mappings,
     score_context,
@@ -67,12 +68,27 @@ def rank(
         so it is attached as an informational column only and never enters
         the weighted final_score.
 
+    hpa_evidence / depmap_evidence / protein_evidence: dicts of
+        {label, score, percentile} — a qualitative Low/Medium/High/No data
+        label alongside the exact underlying value, so the label never has
+        to stand alone (see scorer._level_label_with_percentile).
+        geo_evidence: {label: Confirms/Contradicts/No data, score, percentile
+        (always None — GEO's signal is a confirmation bonus, not a rank)}.
+        Surfaces per-source agreement or disagreement directly, rather than
+        only the blended quality_score.
+
+    vs_next_rank: a concrete, numeric explanation of why this cell line
+        ranks above the next one down (see explain_rank_difference), or
+        None for the last row.
+
     Returns columns:
         cellosaurus_id, official_name, final_score,
         rna_score, protein_score, quality_score, context_score,
         geo_confirmation, n_sources, disease, lineage,
         hpa_score, depmap_score, missing_data_flag,
         dependency_score, dependency_percentile,
+        hpa_evidence, depmap_evidence, geo_evidence, protein_evidence,
+        vs_next_rank,
         exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
     if weights is None:
@@ -94,6 +110,37 @@ def rank(
         pd.DataFrame({"cellosaurus_id": list(all_cvcl)})
         .merge(rna_df, on="cellosaurus_id", how="left")
         .merge(protein_df, on="cellosaurus_id", how="left")
+    )
+
+    # ── Per-source evidence (label + exact score + percentile) — computed
+    # before the fillna(0.0) calls below, which would otherwise collapse
+    # "no proteomics data" and "proteomics data present but low" into the
+    # same 0.0 and mislabel both as "Low" instead of "No data".
+    #
+    # hpa_score / depmap_score / protein_score are ALREADY 0-1 percentile
+    # ranks (see scorer._pct_rank) computed globally across every cell line
+    # with data for this gene — not raw magnitudes. So the "percentile"
+    # passed in is the score itself, not a re-rank of it. Re-ranking again
+    # here (e.g. via .rank(pct=True) on `result`) would silently produce a
+    # LOCAL percentile relative to whatever subset happens to be in
+    # `result` at that point (and after top_n truncation, relative to just
+    # the displayed top N) — a different, misleading number masquerading
+    # as the real one.
+    result["hpa_evidence"] = result["hpa_score"].apply(
+        lambda s: _level_label_with_percentile(s, s)
+    )
+    result["depmap_evidence"] = result["depmap_score"].apply(
+        lambda s: _level_label_with_percentile(s, s)
+    )
+    result["protein_evidence"] = result["protein_score"].apply(
+        lambda s: _level_label_with_percentile(s, s)
+    )
+    result["geo_evidence"] = result["geo_confirmation"].apply(
+        lambda x: {
+            "label": ("Confirms" if x > 0 else "Contradicts" if x < 0 else "No data"),
+            "score": round(float(x), 3) if pd.notna(x) else None,
+            "percentile": None,
+        }
     )
 
     result["rna_score"]       = result["rna_score"].fillna(0.0)
@@ -154,12 +201,19 @@ def rank(
     crispr_df = score_crispr_dependency(gene)
     result = result.merge(crispr_df, on="cellosaurus_id", how="left")
 
+    # ── Adjacent-rank comparisons — must run after final ordering/truncation
+    # (sort_values + head(top_n) above) is locked in, since it compares each
+    # row to the NEXT row in the returned order.
+    result = add_rank_comparisons(result, weights)
+
     out_cols = [
         "cellosaurus_id", "official_name", "final_score",
         "rna_score", "protein_score", "quality_score", "context_score",
         "geo_confirmation", "n_sources", "disease", "lineage",
         "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
         "dependency_score", "dependency_percentile",
+        "hpa_evidence", "depmap_evidence", "geo_evidence", "protein_evidence",
+        "vs_next_rank",
     ]
     if exclude_genes:
         out_cols.append("exclusion_warning")
@@ -182,6 +236,56 @@ def rank(
             lambda cvcl: alts.get(cvcl, [])
         )
 
+    return result
+
+
+def explain_rank_difference(row_a: pd.Series, row_b: pd.Series, weights: dict) -> str:
+    """
+    Given two ranked cell lines, explain in concrete numeric terms why
+    row_a ranks above/below row_b: which weighted score component
+    contributed the most to the gap, and by how much.
+    """
+    components = ["rna", "protein", "quality", "context"]
+    diffs = []
+    for comp in components:
+        col = f"{comp}_score"
+        val_a = row_a.get(col, 0) or 0
+        val_b = row_b.get(col, 0) or 0
+        weighted_diff = weights[comp] * (val_a - val_b)
+        diffs.append((comp, val_a, val_b, weighted_diff))
+
+    diffs.sort(key=lambda x: abs(x[3]), reverse=True)
+    top_comp, val_a, val_b, weighted_diff = diffs[0]
+
+    direction = "higher" if weighted_diff > 0 else "lower"
+    name_a = row_a.get("official_name", "Cell line A")
+    name_b = row_b.get("official_name", "Cell line B")
+
+    return (
+        f"{name_a} ranks {'above' if weighted_diff > 0 else 'below'} "
+        f"{name_b} primarily due to {direction} {top_comp} "
+        f"score ({val_a:.2f} vs {val_b:.2f}, contributing "
+        f"{abs(weighted_diff):.3f} to the final score gap)."
+    )
+
+
+def add_rank_comparisons(result: pd.DataFrame, weights: dict) -> pd.DataFrame:
+    """
+    For each cell line, add an explanation of why it ranks above the
+    next-ranked cell line (None for the last row). Must be called after
+    `result` is in its final sorted/truncated order — it compares each row
+    to the literal next row, not by any score field.
+    """
+    result = result.reset_index(drop=True)
+    comparisons = []
+    for i in range(len(result)):
+        if i < len(result) - 1:
+            comparisons.append(
+                explain_rank_difference(result.iloc[i], result.iloc[i + 1], weights)
+            )
+        else:
+            comparisons.append(None)
+    result["vs_next_rank"] = comparisons
     return result
 
 

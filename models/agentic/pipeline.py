@@ -198,6 +198,11 @@ def run(
             "rank":                rank_pos + 1,
             "cellosaurus_id":      cvcl,
             "official_name":       name,
+            "hpa_evidence":        row.get("hpa_evidence"),
+            "depmap_evidence":     row.get("depmap_evidence"),
+            "geo_evidence":        row.get("geo_evidence"),
+            "protein_evidence":    row.get("protein_evidence"),
+            "vs_next_rank":        row.get("vs_next_rank"),
             "scores": {
                 "final_score":      final_score,
                 "rna_score":        float(row.get("rna_score") or 0),

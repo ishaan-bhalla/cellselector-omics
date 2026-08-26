@@ -111,6 +111,46 @@ def _pct_rank(series: pd.Series) -> np.ndarray:
     return series.rank(pct=True, method="average").values
 
 
+def _level_label_with_percentile(score: float | None, percentile: float | None) -> dict:
+    """
+    Qualitative Low/Medium/High label PLUS the precise underlying number,
+    so the coarse label never has to stand alone — a user can always drill
+    down to the exact score/percentile behind it.
+
+    score and percentile are typically the same value here: hpa_score /
+    depmap_score / protein_score are themselves already 0-1 percentile
+    ranks (see _pct_rank, used by score_rna_expression / score_protein_expression),
+    not raw magnitudes — so the "percentile" IS the score, not a
+    re-ranking of it. (A caller could pass a genuinely different
+    percentile if one were ever computed separately.)
+
+    Returns {"label", "score", "percentile"} — percentile pre-formatted
+    as "68th percentile" (or None) so callers can drop it straight into
+    a UI or an LLM prompt.
+    """
+    if score is None or pd.isna(score):
+        return {"label": "No data", "score": None, "percentile": None}
+
+    if score >= 0.66:
+        label = "High"
+    elif score >= 0.33:
+        label = "Medium"
+    else:
+        label = "Low"
+
+    pct_display = (
+        f"{percentile * 100:.0f}th percentile"
+        if percentile is not None and pd.notna(percentile)
+        else None
+    )
+
+    return {
+        "label":      label,
+        "score":      round(float(score), 3),
+        "percentile": pct_display,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PRIMARY RNA SCORING  (HPA + DepMap)
 # GEO is computed separately and returned as a ±0.10 confirmation signal

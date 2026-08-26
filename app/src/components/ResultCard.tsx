@@ -44,6 +44,13 @@ function parseJustification(text: string): Record<string, string> {
   return sections
 }
 
+function levelColor(level: string) {
+  if (level === 'High' || level === 'Confirms') return 'text-green-700 font-semibold'
+  if (level === 'Medium') return 'text-amber-600 font-semibold'
+  if (level === 'Low' || level === 'Contradicts') return 'text-red-600 font-semibold'
+  return 'text-gray-400'
+}
+
 const CLASS_STYLE: Record<string, string> = {
   tissue_specific:  'bg-[#E8F5E9] text-[#2D6A4F]',
   ubiquitous:       'bg-[#FFF8E1] text-[#F57F17]',
@@ -167,6 +174,34 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         </div>
       )}
 
+      {/* Per-source evidence — label + exact percentile, so cross-source
+          agreement/disagreement is visible without losing precision to a
+          coarse Low/Medium/High bucket. */}
+      <div className="grid grid-cols-4 gap-3 mt-2 mb-3">
+        {[
+          { key: 'hpa_evidence', name: 'HPA RNA' },
+          { key: 'depmap_evidence', name: 'DepMap' },
+          { key: 'geo_evidence', name: 'GEO' },
+          { key: 'protein_evidence', name: 'Proteomics' },
+        ].map(({ key, name }) => {
+          const ev = result[key]
+          if (!ev) return null
+          return (
+            <div key={key} className="text-xs">
+              <div className="text-[#6E6E73]">{name}</div>
+              <div className={levelColor(ev.label)}>
+                {ev.label}
+              </div>
+              {ev.percentile && (
+                <div className="text-[10px] text-gray-400">
+                  {ev.percentile}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
       {/* Evidence line */}
       <div className="text-[#6E6E73] text-xs mb-2">
         {[result.disease, result.lineage, result.n_sources ? `${result.n_sources} RNA src` : null]
@@ -225,6 +260,12 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         <ScoreBar label="Quality" value={result.quality_score ?? 0} />
         <ScoreBar label="Context" value={result.context_score ?? 0} />
       </Section>
+
+      {result.vs_next_rank && (
+        <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-[#6E6E73] italic">
+          {result.vs_next_rank}
+        </div>
+      )}
 
       {/* AI Justification */}
       <div className="border-t border-[#F5F5F7] mt-3 pt-3">

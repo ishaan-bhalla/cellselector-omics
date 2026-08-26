@@ -213,6 +213,17 @@ def retrieve_evidence(
         "geo_expression":        geo_evidence,
         "proteomics":            prot_evidence,
         "crispr_dependency":     crispr_evidence,
+        # Precise {label, score, percentile} dicts computed once in rank()
+        # (see ranker.add_rank_comparisons's neighbors) and read straight
+        # off top_result_df_row — same reuse pattern as crispr_dependency
+        # above, no re-querying. Distinct from hpa_expression/depmap_expression/
+        # geo_expression/proteomics above, which carry raw values (nTPM,
+        # TPM_log1p, GEO sample stats); these carry the label+percentile
+        # pair so format_context() can cite exact percentiles.
+        "hpa_evidence":          top_result_df_row.get("hpa_evidence"),
+        "depmap_evidence":       top_result_df_row.get("depmap_evidence"),
+        "geo_evidence":          top_result_df_row.get("geo_evidence"),
+        "protein_evidence":      top_result_df_row.get("protein_evidence"),
         "metadata":              metadata,
         "scores":                scores,
         "literature":            papers,
@@ -306,6 +317,23 @@ def format_context(gene: str, evidence: dict) -> str:
     gene_role = evidence.get("gene_role")
     gene_role_line = f"\nGENE ROLE: {gene} is a {gene_role}." if gene_role else ""
 
+    # Precise label + exact percentile per source, so the LLM can cite
+    # "93rd percentile" rather than only a coarse High/Medium/Low bucket —
+    # two cell lines both labeled "High" can still differ meaningfully.
+    def _ev_line(key: str) -> str:
+        ev = evidence.get(key) or {}
+        label = ev.get("label", "N/A")
+        pct   = ev.get("percentile") or "N/A"
+        return f"{label} ({pct})"
+
+    precise_section = (
+        f"PRECISE EVIDENCE (label + exact percentile per source):\n"
+        f"- HPA: {_ev_line('hpa_evidence')}\n"
+        f"- DepMap: {_ev_line('depmap_evidence')}\n"
+        f"- GEO: {_ev_line('geo_evidence')}\n"
+        f"- Proteomics: {_ev_line('protein_evidence')}"
+    )
+
     return f"""CELL LINE: {meta['official_name']} ({evidence['cellosaurus_id']})
 GENE QUERIED: {gene}{gene_role_line}
 
@@ -315,6 +343,8 @@ EXPRESSION EVIDENCE:
 - GEO ({geo_line}):
   GEO confirmation: {geo_conf_str}
 - Proteomics:           {prot_line}
+
+{precise_section}
 
 {crispr_section}
 
