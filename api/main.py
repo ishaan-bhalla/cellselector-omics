@@ -189,6 +189,17 @@ def _safe_float(v) -> float:
         return 0.0
 
 
+def _sanitize_for_json(obj):
+    """Recursively replace NaN/Inf floats with None so JSON serialisation never fails."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
+
+
 def _build_classical_result(
     rank_pos: int,
     row: pd.Series,
@@ -252,11 +263,9 @@ def _build_classical_result(
 async def recommend_classical(body: ClassicalRequest):
     t0 = time.time()
 
-    weights      = FIXED_WEIGHTS
-    weights_used = "fixed"
+    weights = FIXED_WEIGHTS
     if body.use_learned_weights:
-        weights      = await _get_learned_weights()
-        weights_used = "learned"
+        weights = await _get_learned_weights()
 
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(
@@ -305,9 +314,9 @@ async def recommend_classical(body: ClassicalRequest):
         "metadata": {
             "total_candidates":  total_candidates,
             "execution_time_ms": execution_ms,
-            "weights_used":      weights_used,
         },
     }
+    response = _sanitize_for_json(response)
     response["session_id"] = _store_session(response)
     return response
 
@@ -324,6 +333,7 @@ async def recommend_agentic(body: AgenticRequest):
     pipeline_out = await asyncio.to_thread(
         pipeline_run,
         body.gene, body.disease_filter, body.lineage_filter, body.top_n,
+        body.target_cellosaurus_id, body.exclude_genes or None,
     )
 
     # Reconstruct a minimal DataFrame for find_alternatives (needs cellosaurus_id column)
@@ -383,6 +393,7 @@ async def recommend_agentic(body: AgenticRequest):
             ),
         },
     }
+    response = _sanitize_for_json(response)
     response["session_id"] = _store_session(response)
 
     resp = JSONResponse(content=response)
@@ -533,7 +544,74 @@ async def export_results(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. GET /cell-lines/{cellosaurus_id}
+# 6. GET /cell-lines  (list / search)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/cell-lines")
+def list_cell_lines(
+    search: str | None = Query(None, description="Filter by name, disease or lineage"),
+    limit: int = Query(100, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    request: Request = None,
+):
+    master = request.app.state.master_merged
+    lookup = request.app.state.cell_line_lookup
+
+    merged = master.merge(
+        lookup[["cellosaurus_id", "disease", "lineage"]],
+        on="cellosaurus_id",
+        how="left",
+    )
+    for col in ("has_mutations", "has_fusions"):
+        if col not in merged.columns:
+            merged[col] = False
+
+    merged = merged.drop_duplicates("cellosaurus_id")
+
+    if search:
+        s = search.strip().lower()
+        mask = (
+            merged["official_name"].fillna("").str.lower().str.contains(s, regex=False)
+            | merged["disease"].fillna("").str.lower().str.contains(s, regex=False)
+            | merged["lineage"].fillna("").str.lower().str.contains(s, regex=False)
+        )
+        merged = merged[mask]
+
+    total   = int(len(merged))
+    page_df = merged.iloc[offset : offset + limit]
+
+    def _bool(v) -> bool:
+        try:
+            return bool(v) if v is not None and not (isinstance(v, float) and math.isnan(v)) else False
+        except Exception:
+            return False
+
+    def _clean(v) -> str:
+        s = str(v) if v is not None else ""
+        return "" if s in ("nan", "None", "NaN") else s.strip()
+
+    results = [
+        {
+            "cellosaurus_id":  _clean(row.get("cellosaurus_id")),
+            "official_name":   _clean(row.get("official_name")),
+            "disease":         _clean(row.get("disease")),
+            "lineage":         _clean(row.get("lineage")),
+            "confidence":      round(min(1.0, max(0.0, _safe_float(row.get("confidence")))), 3),
+            "evidence_count":  int(row.get("evidence_count") or 0),
+            "has_hpa_expr":    _bool(row.get("has_hpa_expr")),
+            "has_depmap_expr": _bool(row.get("has_depmap_expr")),
+            "has_geo_expr":    _bool(row.get("has_geo_expr")),
+            "has_proteomics":  _bool(row.get("has_proteomics")),
+            "has_mutations":   _bool(row.get("has_mutations")),
+            "has_fusions":     _bool(row.get("has_fusions")),
+        }
+        for _, row in page_df.iterrows()
+    ]
+
+    return {"total": total, "results": results}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. GET /cell-lines/{cellosaurus_id}
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/cell-lines/{cellosaurus_id}")
 def cell_line_profile(cellosaurus_id: str, request: Request):
@@ -581,7 +659,7 @@ def cell_line_profile(cellosaurus_id: str, request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. GET /stats
+# 8. GET /stats
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/stats")
 def stats(request: Request):

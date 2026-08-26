@@ -25,7 +25,8 @@ def rank(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
     top_n: int | None = 10,
-    weights: dict = FIXED_WEIGHTS,
+    weights: dict | None = None,
+    use_learned_weights: bool = True,
     expression_threshold: bool = True,
     exclude_genes: list[str] | None = None,
     include_alternatives: bool = False,
@@ -55,6 +56,13 @@ def rank(
         hpa_score, depmap_score, missing_data_flag,
         exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
+    if weights is None:
+        if use_learned_weights:
+            from models.classical.weights_learned import optimise_weights
+            weights = optimise_weights()
+        else:
+            weights = FIXED_WEIGHTS
+
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
     gene_class = classify_gene(gene)
 
@@ -95,6 +103,24 @@ def rank(
     result["final_score"] = result["final_score"].clip(0.0, 1.0)
     result["gene_class"] = classify_gene(gene)
 
+    # ── Exclusion-gene penalties ──────────────────────────────────────────────
+    if exclude_genes:
+        for excl_gene in exclude_genes:
+            excl_rna = score_rna_expression(excl_gene, hpa_to_cvcl, gsm_to_cvcl)
+            cvcl_map = dict(zip(excl_rna["cellosaurus_id"], excl_rna["rna_score"]))
+            score_col = f"excluded_{excl_gene}_score"
+            flag_col  = f"excluded_{excl_gene}_flag"
+            result[score_col] = result["cellosaurus_id"].map(
+                lambda c: float(cvcl_map.get(c, 0.0))
+            )
+            result["final_score"] = (
+                result["final_score"] * (1 - result[score_col] * 0.5)
+            ).clip(0.0, 1.0)
+            result[flag_col] = result[score_col] > 0.5
+        result["exclusion_warning"] = result[
+            [f"excluded_{g}_flag" for g in exclude_genes]
+        ].any(axis=1)
+
     if disease_filter or lineage_filter:
         result = result[result["context_score"] > 0]
 
@@ -114,6 +140,7 @@ def rank(
         "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
     ]
     if exclude_genes:
+        out_cols.append("exclusion_warning")
         for g in exclude_genes:
             out_cols.extend([f"excluded_{g}_score", f"excluded_{g}_flag"])
 
