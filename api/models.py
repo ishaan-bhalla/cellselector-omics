@@ -8,8 +8,9 @@ class ClassicalRequest(BaseModel):
     lineage_filter: Optional[str] = None
     exclude_genes: list[str] = Field(default_factory=list)
     top_n: int = Field(default=10, ge=1, le=50)
-    use_learned_weights: bool = False
+    use_learned_weights: bool = True
 
 
 class AgenticRequest(ClassicalRequest):
     ollama_model: str = "llama3.1:8b"
+    target_cellosaurus_id: Optional[str] = None

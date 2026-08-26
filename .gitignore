@@ -230,3 +230,5 @@ outputs/
 *.gctx
 *.pkl
 *.xlsx
+app/node_modules/
+app/dist/

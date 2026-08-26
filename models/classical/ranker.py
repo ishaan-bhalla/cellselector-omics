@@ -25,7 +25,8 @@ def rank(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
     top_n: int | None = 10,
-    weights: dict = FIXED_WEIGHTS,
+    weights: dict | None = None,
+    use_learned_weights: bool = True,
     expression_threshold: bool = True,
 ) -> pd.DataFrame:
     """
@@ -44,6 +45,13 @@ def rank(
         geo_confirmation, n_sources, disease, lineage,
         hpa_score, depmap_score, missing_data_flag
     """
+    if weights is None:
+        if use_learned_weights:
+            from models.classical.weights_learned import optimise_weights
+            weights = optimise_weights()
+        else:
+            weights = FIXED_WEIGHTS
+
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
 
     rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl)
