@@ -135,7 +135,19 @@ def retrieve_evidence(
                 "percentile": round(float(top_result_df_row.get("protein_score", 0) or 0) * 100, 1),
             }
 
-    # ── 5. Cell line metadata ────────────────────────────────────────────────
+    # ── 5. CRISPR dependency (essentiality — distinct from expression) ──────
+    # rank() already merges score_crispr_dependency() onto every result row,
+    # so dependency_score / dependency_percentile are read straight off
+    # top_result_df_row rather than re-querying the parquet file here.
+    crispr_dep_score = top_result_df_row.get("dependency_score")
+    crispr_dep_pct   = top_result_df_row.get("dependency_percentile")
+    crispr_evidence: dict | None = (
+        {"score": float(crispr_dep_score), "percentile": float(crispr_dep_pct)}
+        if pd.notna(crispr_dep_score) and pd.notna(crispr_dep_pct)
+        else None
+    )
+
+    # ── 6. Cell line metadata ────────────────────────────────────────────────
     master_cols = [
         "cellosaurus_id", "official_name", "evidence_count",
         "has_mutations", "has_fusions", "MSIScore", "Ploidy",
@@ -159,7 +171,7 @@ def retrieve_evidence(
             "ploidy":         round(float(r["Ploidy"]), 2)   if pd.notna(r.get("Ploidy"))  else None,
         })
 
-    # ── 6. Score breakdown ───────────────────────────────────────────────────
+    # ── 7. Score breakdown ───────────────────────────────────────────────────
     def _f(key: str) -> float:
         return round(float(top_result_df_row.get(key) or 0), 4)
 
@@ -174,12 +186,12 @@ def retrieve_evidence(
         "final_score":      _f("final_score"),
     }
 
-    # ── 7. PubMed literature ─────────────────────────────────────────────────
+    # ── 8. PubMed literature ─────────────────────────────────────────────────
     cell_line_name = str(top_result_df_row.get("official_name") or cellosaurus_id)
     disease_str    = str(top_result_df_row.get("disease") or "") or None
     papers = get_cell_line_literature(gene, cell_line_name, disease_str)
 
-    # ── 8. Dataset citations ──────────────────────────────────────────────────
+    # ── 9. Dataset citations ──────────────────────────────────────────────────
     # Attach a citation for each data source that contributed evidence for
     # this cell line. Cellosaurus is always included as the ID spine.
     dataset_cites: list[dict] = []
@@ -200,6 +212,7 @@ def retrieve_evidence(
         "depmap_expression":     dep_evidence,
         "geo_expression":        geo_evidence,
         "proteomics":            prot_evidence,
+        "crispr_dependency":     crispr_evidence,
         "metadata":              metadata,
         "scores":                scores,
         "literature":            papers,
@@ -252,6 +265,26 @@ def format_context(gene: str, evidence: dict) -> str:
         if prot else "not available"
     )
 
+    crispr = evidence.get("crispr_dependency")
+    if crispr:
+        crispr_score = crispr["score"]
+        crispr_pct   = crispr["percentile"] * 100
+        crispr_line = (
+            f"Dependency score: {crispr_score:.3f} ({crispr_pct:.0f}th percentile) - "
+            f"indicates how essential {gene} is for this cell line's survival, "
+            f"DIFFERENT from expression level."
+        )
+    else:
+        crispr_line = "No CRISPR dependency data available for this cell line."
+    crispr_section = (
+        f"CRISPR ESSENTIALITY (DepMap):\n"
+        f"{crispr_line}\n"
+        f"Note: high essentiality with low expression may indicate a "
+        f"unique/hidden dependency worth investigating; high expression "
+        f"with low essentiality suggests the gene is dispensable here "
+        f"despite being transcribed."
+    )
+
     geo_conf = scores["geo_confirmation"]
     geo_conf_str = (
         "GEO CONFIRMS (+0.10 bonus)"  if geo_conf > 0 else
@@ -282,6 +315,8 @@ EXPRESSION EVIDENCE:
 - GEO ({geo_line}):
   GEO confirmation: {geo_conf_str}
 - Proteomics:           {prot_line}
+
+{crispr_section}
 
 CELL LINE PROFILE:
 - Disease:              {meta.get('disease', 'unknown')}
