@@ -33,6 +33,63 @@ def _get_learned_weights() -> dict:
     return _CACHED_LEARNED_WEIGHTS
 
 
+def _quality_explanation(row) -> str:
+    n_sources = int(row.get("n_sources", 0) or 0)
+    parts = [f"{n_sources}/2 primary RNA sources available"]
+
+    hpa = row.get("hpa_score")
+    depmap = row.get("depmap_score")
+    if pd.notna(hpa) and pd.notna(depmap):
+        diff = abs(hpa - depmap)
+        agreement = "agree closely" if diff < 0.15 else (
+            "agree moderately" if diff < 0.35 else "disagree"
+        )
+        parts.append(f"HPA and DepMap {agreement}")
+
+    return "; ".join(parts)
+
+
+def _context_explanation(row, disease_filter, lineage_filter) -> str:
+    """
+    Explain context_score by checking which field actually produced the
+    match, using the SAME conditions score_context() uses (see
+    scorer.score_context's _dmatch / _lmatch) — not an independent
+    judgment that could disagree with the real score.
+
+    Disease matching has an exact (1.0) and partial/substring (0.5) tier.
+    Lineage matching does NOT — score_context._lmatch scores any
+    substring-or-exact lineage match as a full 1.0, with no 0.5 tier.
+    So a lineage substring match is reported as an exact match here too:
+    calling it "partial" would contradict the 1.0 score sitting right
+    next to it.
+    """
+    context = row.get("context_score", 0) or 0
+    disease_raw = row.get("disease")
+    lineage_raw = row.get("lineage")
+    disease = disease_raw if pd.notna(disease_raw) else ""
+    lineage = lineage_raw if pd.notna(lineage_raw) else ""
+    disease_l, lineage_l = disease.lower(), lineage.lower()
+    df = disease_filter.lower().strip() if disease_filter else None
+    lf = lineage_filter.lower().strip() if lineage_filter else None
+
+    disease_exact   = bool(df) and disease_l == df
+    disease_partial = bool(df) and not disease_exact and (df in disease_l or disease_l in df)
+    lineage_match   = bool(lf) and (lf in lineage_l or lineage_l == lf)
+
+    if disease_exact:
+        return f"Exact match: disease '{disease}' matches your search"
+    elif lineage_match:
+        return f"Exact match: lineage '{lineage}' matches your search"
+    elif disease_partial:
+        return f"Partial match: disease '{disease}' contains your search term"
+    elif context >= 1.0:
+        return "Exact match to your search filter"
+    elif context >= 0.5:
+        return "Partial match to your search filter"
+    else:
+        return "No match to disease/tissue filter"
+
+
 def rank(
     gene: str,
     disease_filter: str | None = None,
@@ -155,6 +212,14 @@ def rank(
     result = result.merge(context_df, on="cellosaurus_id", how="left")
     result["context_score"] = result["context_score"].fillna(0.0)
 
+    # ── Plain-English explanations for the two composite scores — these
+    # blend multiple signals into one number, which is exactly why they
+    # need a sentence next to them instead of standing as a bare pill.
+    result["quality_explanation"] = result.apply(_quality_explanation, axis=1)
+    result["context_explanation"] = result.apply(
+        lambda r: _context_explanation(r, disease_filter, lineage_filter), axis=1
+    )
+
     result["final_score"] = (
         weights["rna"]     * result["rna_score"]
         + weights["protein"] * result["protein_score"]
@@ -213,7 +278,7 @@ def rank(
         "hpa_score", "depmap_score", "missing_data_flag", "gene_class",
         "dependency_score", "dependency_percentile",
         "hpa_evidence", "depmap_evidence", "geo_evidence", "protein_evidence",
-        "vs_next_rank",
+        "vs_next_rank", "quality_explanation", "context_explanation",
     ]
     if exclude_genes:
         out_cols.append("exclusion_warning")

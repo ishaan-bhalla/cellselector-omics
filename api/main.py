@@ -246,6 +246,8 @@ def _build_classical_result(
         "geo_evidence":       row.get("geo_evidence"),
         "protein_evidence":   row.get("protein_evidence"),
         "vs_next_rank":       row.get("vs_next_rank"),
+        "quality_explanation": row.get("quality_explanation") or "",
+        "context_explanation": row.get("context_explanation") or "",
         "gene_class":         row.get("gene_class"),
         "gene_role":          get_gene_role(gene),
         "growth_properties":  get_growth_properties(cvcl),

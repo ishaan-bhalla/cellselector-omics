@@ -203,6 +203,8 @@ def run(
             "geo_evidence":        row.get("geo_evidence"),
             "protein_evidence":    row.get("protein_evidence"),
             "vs_next_rank":        row.get("vs_next_rank"),
+            "quality_explanation": row.get("quality_explanation") or "",
+            "context_explanation": row.get("context_explanation") or "",
             "scores": {
                 "final_score":      final_score,
                 "rna_score":        float(row.get("rna_score") or 0),
