@@ -13,7 +13,18 @@ from config import (
     PARQUET_DIR,
     SAMPLE_INFO,
 )
+from models.agentic.growth_properties import format_growth_properties, get_growth_properties
 from models.agentic.pubmed import format_citations, get_cell_line_literature
+from models.classical.scorer import get_gene_role
+
+_PATHWAY_CACHE: dict = {}
+
+
+def _get_cached_pathways(gene: str) -> list[dict]:
+    if gene not in _PATHWAY_CACHE:
+        from models.agentic.pathways import get_kegg_pathways
+        _PATHWAY_CACHE[gene] = get_kegg_pathways(gene)
+    return _PATHWAY_CACHE[gene]
 
 
 def retrieve_evidence(
@@ -194,6 +205,9 @@ def retrieve_evidence(
         "literature":            papers,
         "literature_formatted":  format_citations(papers),
         "dataset_citations":     dataset_cites,
+        "pathways":              _get_cached_pathways(gene),
+        "gene_role":             get_gene_role(gene),
+        "growth_properties":     get_growth_properties(cellosaurus_id),
     }
 
 
@@ -247,8 +261,20 @@ def format_context(gene: str, evidence: dict) -> str:
 
     lit_formatted = evidence.get("literature_formatted", "SUPPORTING LITERATURE:\n  (no relevant papers found)")
 
+    pathways = evidence.get("pathways", [])
+    if pathways:
+        pathway_lines = "\n".join(
+            f"  - {p['name']} ({p['url']})" for p in pathways[:10]
+        )
+        pathway_section = f"PATHWAY CONTEXT:\n{pathway_lines}"
+    else:
+        pathway_section = "PATHWAY CONTEXT: (no KEGG pathways found)"
+
+    gene_role = evidence.get("gene_role")
+    gene_role_line = f"\nGENE ROLE: {gene} is a {gene_role}." if gene_role else ""
+
     return f"""CELL LINE: {meta['official_name']} ({evidence['cellosaurus_id']})
-GENE QUERIED: {gene}
+GENE QUERIED: {gene}{gene_role_line}
 
 EXPRESSION EVIDENCE:
 - HPA RNA (nTPM):       {hpa_line}
@@ -275,5 +301,11 @@ SCORES:
 - Final fit score:      {scores['final_score']:.2f}
 
 {lit_formatted}
+
+{pathway_section}
+
+CULTURE/ASSAY CONTEXT:
+{format_growth_properties(evidence.get("growth_properties"))}
+Consider doubling time when assessing suitability for time-sensitive assays (e.g. high-throughput screening favours faster-doubling lines).
 
 Use these papers to support your justification where relevant. Cite as [1], [2] etc."""

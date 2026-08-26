@@ -139,6 +139,11 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
             {(result.gene_class as string).replace(/_/g, ' ')}
           </span>
         )}
+        {result.gene_role && (
+          <span className="text-xs text-[#6E6E73] italic">
+            {result.gene_role}
+          </span>
+        )}
         {[
           { label: 'RNA',     val: result.rna_score },
           { label: 'PROTEIN', val: result.protein_score },
@@ -168,6 +173,15 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
           .filter(Boolean)
           .join(' · ')}
       </div>
+
+      {/* Doubling time */}
+      {result.growth_properties?.doubling_time && (
+        <div className="text-xs text-[#6E6E73] mt-1">
+          Doubling time: {result.growth_properties.doubling_time.min}
+          –{result.growth_properties.doubling_time.max}{' '}
+          {result.growth_properties.doubling_time.unit}s
+        </div>
+      )}
 
       {/* Exclusion warnings */}
       {result.exclusion_warnings?.length > 0 && (

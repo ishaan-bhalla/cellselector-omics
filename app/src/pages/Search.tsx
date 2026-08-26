@@ -21,12 +21,25 @@ export default function Search() {
   const [lineageFilter, setLineageFilter] = useState('')
   const [excludeGenes, setExcludeGenes] = useState('')
   const [topN, setTopN] = useState(10)
-  const [results, setResults] = useState<any>(null)
+  const [allResults, setAllResults] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [loadLine, setLoadLine] = useState(0)
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!exportOpen) return
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [exportOpen])
 
   useEffect(() => {
     if (!gene.trim()) { setGeneInfo(null); return }
@@ -53,7 +66,7 @@ export default function Search() {
   const handleSearch = async () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
-    setLoading(true); setResults(null); setError(null)
+    setLoading(true); setAllResults(null); setError(null)
     try {
       const r = await api.recommendClassical({
         gene: g,
@@ -62,10 +75,10 @@ export default function Search() {
         exclude_genes: excludeGenes
           ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
           : undefined,
-        top_n: topN,
+        top_n: 50,
       })
       if (r.detail) throw new Error(r.detail)
-      setResults(r)
+      setAllResults(r)
     } catch (e: any) {
       setError(e?.message ?? 'Request failed. Is the API running on port 8001?')
     } finally {
@@ -74,8 +87,8 @@ export default function Search() {
   }
 
   const exportJSON = () => {
-    if (!results) return
-    const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' })
+    if (!allResults) return
+    const blob = new Blob([JSON.stringify(allResults, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -84,10 +97,10 @@ export default function Search() {
   }
 
   const exportCSV = () => {
-    if (!results?.results) return
+    if (!allResults?.results) return
     const headers = ['rank','cellosaurus_id','official_name','final_score','rna_score',
       'protein_score','quality_score','context_score','n_sources','gene_class','disease','lineage']
-    const rows = (results.results as any[]).map((r: any) => headers.map(h => r[h] ?? '').join(','))
+    const rows = (allResults.results as any[]).map((r: any) => headers.map(h => r[h] ?? '').join(','))
     const csv = [headers.join(','), ...rows].join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -96,6 +109,29 @@ export default function Search() {
     a.download = `cellselector_${gene}_${new Date().toISOString().split('T')[0]}.csv`
     a.click(); URL.revokeObjectURL(url)
   }
+
+  const exportPDF = async () => {
+    if (!allResults?.session_id) {
+      alert('No session available — run a search first')
+      return
+    }
+    const response = await fetch(`/recommend/export/pdf?session_id=${allResults.session_id}`)
+    if (!response.ok) {
+      console.error('PDF export failed', response.status)
+      return
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `cellselector_${gene}_${new Date().toISOString().split('T')[0]}.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const displayedResults = allResults
+    ? { ...allResults, results: (allResults.results as any[]).slice(0, topN) }
+    : null
 
   const geneFound = geneInfo?.found === true
   const sourcesFound = geneFound
@@ -207,44 +243,54 @@ export default function Search() {
         )}
 
         {/* Results */}
-        {results && !loading && (
+        {allResults && !loading && (
           <>
             <div className="flex items-center justify-between mb-6">
               <div>
                 <div className="text-[#1D1D1F] font-bold text-lg">
-                  {results.results?.length} results for{' '}
-                  <span className="font-mono">{results.query?.gene}</span>
-                  {results.query?.disease_filter && (
+                  Showing {displayedResults?.results.length} of {allResults.results?.length} loaded for{' '}
+                  <span className="font-mono">{allResults.query?.gene}</span>
+                  {allResults.query?.disease_filter && (
                     <span className="text-[#6E6E73] text-sm font-normal ml-2">
-                      in {results.query.disease_filter}
+                      in {allResults.query.disease_filter}
                     </span>
                   )}
                 </div>
                 <div className="text-[#6E6E73] text-xs mt-0.5 font-mono">
-                  {results.metadata?.total_candidates?.toLocaleString()} candidates scored
-                  {results.metadata?.execution_time_ms && ` · ${results.metadata.execution_time_ms}ms`}
+                  {allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored
+                  {allResults.metadata?.execution_time_ms && ` · ${allResults.metadata.execution_time_ms}ms`}
                 </div>
               </div>
-              <div className="flex gap-2">
-                {[['Export JSON', exportJSON], ['Export CSV', exportCSV]].map(([label, fn]) => (
-                  <button
-                    key={label as string}
-                    onClick={fn as () => void}
-                    className="text-xs border border-[#D2D2D7] text-[#6E6E73] hover:text-[#1D1D1F] hover:border-[#1D1D1F] px-3 py-1.5 rounded-lg transition-colors"
-                  >
-                    {label as string}
-                  </button>
-                ))}
+              <div className="relative" ref={exportMenuRef}>
+                <button
+                  onClick={() => setExportOpen(o => !o)}
+                  className="text-xs border border-[#D2D2D7] text-[#6E6E73] hover:text-[#1D1D1F] hover:border-[#1D1D1F] px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Export ▾
+                </button>
+                {exportOpen && (
+                  <div className="absolute right-0 mt-2 w-32 bg-white border border-[#D2D2D7] rounded-lg shadow-lg z-10 overflow-hidden">
+                    {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
+                      <button
+                        key={label}
+                        onClick={() => { fn(); setExportOpen(false) }}
+                        className="w-full text-left px-4 py-2 hover:bg-[#F5F5F7] text-sm text-[#1D1D1F] transition-colors"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="space-y-4">
-              {(results.results as any[]).map((r: any) => (
+              {(displayedResults!.results as any[]).map((r: any) => (
                 <ResultCard
                   key={r.cellosaurus_id}
                   result={r}
-                  gene={results.query?.gene ?? gene}
-                  diseaseFilter={results.query?.disease_filter}
+                  gene={allResults.query?.gene ?? gene}
+                  diseaseFilter={allResults.query?.disease_filter}
                   excludeGenes={
                     excludeGenes
                       ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -258,7 +304,7 @@ export default function Search() {
         )}
 
         {/* Empty state */}
-        {!results && !loading && !error && (
+        {!allResults && !loading && !error && (
           <div className="text-center py-24">
             <div className="text-[#D2D2D7] text-6xl mb-5">⬡</div>
             <div className="text-[#6E6E73] text-sm">
