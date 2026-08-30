@@ -1,0 +1,24 @@
+import { Routes, Route } from 'react-router-dom'
+import Navbar from './components/Navbar'
+import Home from './pages/Home'
+import Search from './pages/Search'
+import Browse from './pages/Browse'
+import About from './pages/About'
+import Data from './pages/Data'
+import GraphExplorer from './pages/GraphExplorer'
+
+export default function App() {
+  return (
+    <div className="bg-white text-[#1D1D1F]">
+      <Navbar />
+      <Routes>
+        <Route path="/"       element={<Home />}   />
+        <Route path="/search" element={<Search />} />
+        <Route path="/browse" element={<Browse />} />
+        <Route path="/about"  element={<About />}  />
+        <Route path="/data"   element={<Data />}   />
+        <Route path="/graph"  element={<GraphExplorer />} />
+      </Routes>
+    </div>
+  )
+}

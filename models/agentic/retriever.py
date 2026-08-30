@@ -13,7 +13,18 @@ from config import (
     PARQUET_DIR,
     SAMPLE_INFO,
 )
+from models.agentic.growth_properties import format_growth_properties, get_growth_properties
 from models.agentic.pubmed import format_citations, get_cell_line_literature
+from models.classical.scorer import get_gene_role
+
+_PATHWAY_CACHE: dict = {}
+
+
+def _get_cached_pathways(gene: str) -> list[dict]:
+    if gene not in _PATHWAY_CACHE:
+        from models.agentic.pathways import get_kegg_pathways
+        _PATHWAY_CACHE[gene] = get_kegg_pathways(gene)
+    return _PATHWAY_CACHE[gene]
 
 
 def retrieve_evidence(
@@ -124,7 +135,19 @@ def retrieve_evidence(
                 "percentile": round(float(top_result_df_row.get("protein_score", 0) or 0) * 100, 1),
             }
 
-    # ── 5. Cell line metadata ────────────────────────────────────────────────
+    # ── 5. CRISPR dependency (essentiality — distinct from expression) ──────
+    # rank() already merges score_crispr_dependency() onto every result row,
+    # so dependency_score / dependency_percentile are read straight off
+    # top_result_df_row rather than re-querying the parquet file here.
+    crispr_dep_score = top_result_df_row.get("dependency_score")
+    crispr_dep_pct   = top_result_df_row.get("dependency_percentile")
+    crispr_evidence: dict | None = (
+        {"score": float(crispr_dep_score), "percentile": float(crispr_dep_pct)}
+        if pd.notna(crispr_dep_score) and pd.notna(crispr_dep_pct)
+        else None
+    )
+
+    # ── 6. Cell line metadata ────────────────────────────────────────────────
     master_cols = [
         "cellosaurus_id", "official_name", "evidence_count",
         "has_mutations", "has_fusions", "MSIScore", "Ploidy",
@@ -148,7 +171,7 @@ def retrieve_evidence(
             "ploidy":         round(float(r["Ploidy"]), 2)   if pd.notna(r.get("Ploidy"))  else None,
         })
 
-    # ── 6. Score breakdown ───────────────────────────────────────────────────
+    # ── 7. Score breakdown ───────────────────────────────────────────────────
     def _f(key: str) -> float:
         return round(float(top_result_df_row.get(key) or 0), 4)
 
@@ -163,12 +186,12 @@ def retrieve_evidence(
         "final_score":      _f("final_score"),
     }
 
-    # ── 7. PubMed literature ─────────────────────────────────────────────────
+    # ── 8. PubMed literature ─────────────────────────────────────────────────
     cell_line_name = str(top_result_df_row.get("official_name") or cellosaurus_id)
     disease_str    = str(top_result_df_row.get("disease") or "") or None
     papers = get_cell_line_literature(gene, cell_line_name, disease_str)
 
-    # ── 8. Dataset citations ──────────────────────────────────────────────────
+    # ── 9. Dataset citations ──────────────────────────────────────────────────
     # Attach a citation for each data source that contributed evidence for
     # this cell line. Cellosaurus is always included as the ID spine.
     dataset_cites: list[dict] = []
@@ -189,11 +212,15 @@ def retrieve_evidence(
         "depmap_expression":     dep_evidence,
         "geo_expression":        geo_evidence,
         "proteomics":            prot_evidence,
+        "crispr_dependency":     crispr_evidence,
         "metadata":              metadata,
         "scores":                scores,
         "literature":            papers,
         "literature_formatted":  format_citations(papers),
         "dataset_citations":     dataset_cites,
+        "pathways":              _get_cached_pathways(gene),
+        "gene_role":             get_gene_role(gene),
+        "growth_properties":     get_growth_properties(cellosaurus_id),
     }
 
 
@@ -238,6 +265,26 @@ def format_context(gene: str, evidence: dict) -> str:
         if prot else "not available"
     )
 
+    crispr = evidence.get("crispr_dependency")
+    if crispr:
+        crispr_score = crispr["score"]
+        crispr_pct   = crispr["percentile"] * 100
+        crispr_line = (
+            f"Dependency score: {crispr_score:.3f} ({crispr_pct:.0f}th percentile) - "
+            f"indicates how essential {gene} is for this cell line's survival, "
+            f"DIFFERENT from expression level."
+        )
+    else:
+        crispr_line = "No CRISPR dependency data available for this cell line."
+    crispr_section = (
+        f"CRISPR ESSENTIALITY (DepMap):\n"
+        f"{crispr_line}\n"
+        f"Note: high essentiality with low expression may indicate a "
+        f"unique/hidden dependency worth investigating; high expression "
+        f"with low essentiality suggests the gene is dispensable here "
+        f"despite being transcribed."
+    )
+
     geo_conf = scores["geo_confirmation"]
     geo_conf_str = (
         "GEO CONFIRMS (+0.10 bonus)"  if geo_conf > 0 else
@@ -247,8 +294,20 @@ def format_context(gene: str, evidence: dict) -> str:
 
     lit_formatted = evidence.get("literature_formatted", "SUPPORTING LITERATURE:\n  (no relevant papers found)")
 
+    pathways = evidence.get("pathways", [])
+    if pathways:
+        pathway_lines = "\n".join(
+            f"  - {p['name']} ({p['url']})" for p in pathways[:10]
+        )
+        pathway_section = f"PATHWAY CONTEXT:\n{pathway_lines}"
+    else:
+        pathway_section = "PATHWAY CONTEXT: (no KEGG pathways found)"
+
+    gene_role = evidence.get("gene_role")
+    gene_role_line = f"\nGENE ROLE: {gene} is a {gene_role}." if gene_role else ""
+
     return f"""CELL LINE: {meta['official_name']} ({evidence['cellosaurus_id']})
-GENE QUERIED: {gene}
+GENE QUERIED: {gene}{gene_role_line}
 
 EXPRESSION EVIDENCE:
 - HPA RNA (nTPM):       {hpa_line}
@@ -256,6 +315,8 @@ EXPRESSION EVIDENCE:
 - GEO ({geo_line}):
   GEO confirmation: {geo_conf_str}
 - Proteomics:           {prot_line}
+
+{crispr_section}
 
 CELL LINE PROFILE:
 - Disease:              {meta.get('disease', 'unknown')}
@@ -275,5 +336,11 @@ SCORES:
 - Final fit score:      {scores['final_score']:.2f}
 
 {lit_formatted}
+
+{pathway_section}
+
+CULTURE/ASSAY CONTEXT:
+{format_growth_properties(evidence.get("growth_properties"))}
+Consider doubling time when assessing suitability for time-sensitive assays (e.g. high-throughput screening favours faster-doubling lines).
 
 Use these papers to support your justification where relevant. Cite as [1], [2] etc."""

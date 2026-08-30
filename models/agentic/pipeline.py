@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import json
 import re
 import sys
@@ -90,26 +91,40 @@ def run(
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
     top_n: int = 5,
+    target_cellosaurus_id: str | None = None,
     exclude_genes: list[str] | None = None,
 ) -> dict:
     """
     Full agentic ranking pipeline:
-      1. Classical rank → top_n results
-      2. For each: retrieve evidence, format context, generate LLM justification
-      3. Generate LLM comparative summary
-      4. Save to outputs/agentic_results_{gene}.json
+      1. Classical rank → top_n results (or all if target_cellosaurus_id is set)
+         exclude_genes penalties are applied inside rank() itself.
+      2. Filter to target cell line if target_cellosaurus_id is set.
+      3. For each: retrieve evidence, format context, generate LLM justification.
+      4. Generate LLM comparative summary (skipped when targeting a single cell line).
+      5. Save to outputs/agentic_results_{gene}_{hash}.json.
 
     Returns the full structured output dict.
     """
     print(f"[pipeline] Ranking {gene}"
           + (f" | disease={disease_filter}" if disease_filter else "")
           + (f" | lineage={lineage_filter}" if lineage_filter else "")
-          + f" | top_n={top_n}")
+          + (f" | exclude={','.join(exclude_genes)}" if exclude_genes else "")
+          + (f" | target={target_cellosaurus_id}" if target_cellosaurus_id else f" | top_n={top_n}"))
 
     # ── Step 1: Classical ranking ─────────────────────────────────────────────
+    # When a specific cell line is requested, rank without a top_n cap so the
+    # target is always present in the results before we filter down to it.
+    rank_top_n = None if target_cellosaurus_id else top_n
     ranked = rank(gene, disease_filter=disease_filter,
-                  lineage_filter=lineage_filter, top_n=top_n,
+                  lineage_filter=lineage_filter, top_n=rank_top_n,
                   exclude_genes=exclude_genes)
+
+    if ranked is not None and target_cellosaurus_id:
+        filtered = ranked[ranked["cellosaurus_id"] == target_cellosaurus_id]
+        if len(filtered) == 0:
+            print(f"[pipeline] target {target_cellosaurus_id} not found in ranked results")
+        else:
+            ranked = filtered
 
     if ranked is None or len(ranked) == 0:
         print(f"[pipeline] No results for gene: {gene}")
@@ -197,28 +212,36 @@ def run(
             "alternatives":   alternatives_map.get(cvcl, []),
         })
 
-    # ── Step 3: Comparative summary ───────────────────────────────────────────
-    print("[pipeline] Generating comparative summary...")
-    try:
-        comparative_summary = generate_comparison(gene, results, evidence_list)
-    except ConnectionError as exc:
-        comparative_summary = str(exc)
-    except Exception as exc:
-        comparative_summary = f"LLM unavailable: {exc}"
+    # ── Step 3: Comparative summary (skipped for single-target queries) ───────
+    if target_cellosaurus_id:
+        comparative_summary = ""
+    else:
+        print("[pipeline] Generating comparative summary...")
+        try:
+            comparative_summary = generate_comparison(gene, results, evidence_list)
+        except ConnectionError as exc:
+            comparative_summary = str(exc)
+        except Exception as exc:
+            comparative_summary = f"LLM unavailable: {exc}"
 
     # ── Step 4: Save output ───────────────────────────────────────────────────
     output = {
         "gene":               gene,
         "query": {
-            "disease_filter":  disease_filter,
-            "lineage_filter":  lineage_filter,
-            "top_n":           top_n,
+            "disease_filter":        disease_filter,
+            "lineage_filter":        lineage_filter,
+            "top_n":                 top_n,
+            "target_cellosaurus_id": target_cellosaurus_id,
+            "exclude_genes":         exclude_genes or [],
         },
         "results":            results,
         "comparative_summary": comparative_summary,
     }
 
-    out_path = OUTPUTS_DIR / f"agentic_results_{gene}.json"
+    excl_key = "-".join(sorted(exclude_genes)) if exclude_genes else ""
+    query_key = f"{gene}_{disease_filter}_{lineage_filter}_{target_cellosaurus_id}_{excl_key}"
+    query_hash = hashlib.md5(query_key.encode()).hexdigest()[:8]
+    out_path = OUTPUTS_DIR / f"agentic_results_{gene}_{query_hash}.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     print(f"[pipeline] Saved → {out_path}")

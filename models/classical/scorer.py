@@ -36,6 +36,48 @@ GENE_CLASSES: dict[str, list[str]] = {
     ],
 }
 
+GENE_ROLES: dict[str, str] = {
+    # Receptor tyrosine kinases
+    "EGFR":   "receptor tyrosine kinase",
+    "ERBB2":  "receptor tyrosine kinase (HER2)",
+    "ERBB3":  "receptor tyrosine kinase (HER3)",
+    "MET":    "receptor tyrosine kinase",
+    "KIT":    "receptor tyrosine kinase",
+    "ALK":    "receptor tyrosine kinase",
+    "RET":    "receptor tyrosine kinase",
+    "FLT3":   "receptor tyrosine kinase",
+    "PDGFRA": "receptor tyrosine kinase",
+    # Hormone receptors
+    "ESR1": "estrogen receptor",
+    "AR":   "androgen receptor",
+    "PGR":  "progesterone receptor",
+    # Immune checkpoint / surface markers
+    "CD274": "immune checkpoint marker (PD-L1)",
+    "PDCD1": "immune checkpoint marker (PD-1)",
+    "CTLA4": "immune checkpoint marker",
+    # Tumor suppressors
+    "TP53":  "tumor suppressor",
+    "RB1":   "tumor suppressor",
+    "PTEN":  "tumor suppressor",
+    "BRCA1": "tumor suppressor (DNA repair)",
+    "BRCA2": "tumor suppressor (DNA repair)",
+    "APC":   "tumor suppressor",
+    "VHL":   "tumor suppressor",
+    # Oncogenes / signaling
+    "KRAS":   "oncogene (RAS family GTPase)",
+    "BRAF":   "oncogene (kinase)",
+    "MYC":    "oncogene (transcription factor)",
+    "MYCN":   "oncogene (transcription factor)",
+    "PIK3CA": "oncogene (kinase)",
+    # Proliferation markers
+    "MKI67": "proliferation marker (Ki-67)",
+    "PCNA":  "proliferation marker",
+}
+
+
+def get_gene_role(gene: str) -> str | None:
+    return GENE_ROLES.get(gene.upper())
+
 
 def classify_gene(gene: str) -> str:
     if gene in GENE_CLASSES["loss_of_function"]:
@@ -259,6 +301,43 @@ def score_protein_expression(gene: str, ach_to_cvcl: dict) -> pd.DataFrame:
     return pd.DataFrame({"cellosaurus_id": agg.index, "protein_score": _pct_rank(agg)})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CRISPR DEPENDENCY SCORING (DepMap)
+# Gene ESSENTIALITY, not expression — kept as a separate evidence column,
+# never mixed into the weighted final_score (see ranker.rank()).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_crispr_dependency(gene: str) -> pd.DataFrame:
+    """
+    Load CRISPR dependency scores for a gene.
+
+    High dependency = gene is essential for that cell line's survival —
+    a different signal from high expression (a gene can be highly expressed
+    without being essential, and vice versa).
+
+    Returns columns: cellosaurus_id, dependency_score, dependency_percentile
+    """
+    _empty = pd.DataFrame(
+        columns=["cellosaurus_id", "dependency_score", "dependency_percentile"]
+    )
+
+    crispr_raw = pd.read_parquet(
+        PARQUET_DIR / "crispr_dependency_depmap_preprocessed.parquet",
+        filters=[("gene_symbol", "=", gene)],
+        columns=["cellosaurus_id", "dependency_score"],
+    )
+    crispr_raw = crispr_raw.dropna(subset=["cellosaurus_id"])
+    if len(crispr_raw) == 0:
+        return _empty
+
+    agg = crispr_raw.groupby("cellosaurus_id")["dependency_score"].mean()
+    return pd.DataFrame({
+        "cellosaurus_id":         agg.index,
+        "dependency_score":       agg.values,
+        "dependency_percentile":  _pct_rank(agg),
+    })
+
+
 def score_data_quality(
     cellosaurus_ids,
     rna_df: pd.DataFrame,
@@ -370,3 +449,7 @@ if __name__ == "__main__":
     prot = score_protein_expression("EGFR", ach_to_cvcl)
     print(f"\nProtein: {len(prot)} cell lines")
     print(prot.sort_values("protein_score", ascending=False).head(5).to_string(index=False))
+
+    crispr = score_crispr_dependency("EGFR")
+    print(f"\nCRISPR dependency: {len(crispr)} cell lines")
+    print(crispr.sort_values("dependency_score", ascending=False).head(5).to_string(index=False))
