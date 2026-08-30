@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CellLineFinder — Multi-omics cell line recommendation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap');
+
+:root{
+  --bg:#F1F5F9;
+  --surface:#FFFFFF;
+  --ink:#0F172A;
+  --ink-soft:#475569;
+  --ink-faint:#94A3B8;
+  --line:#E2E8F0;
+  --teal:#0D9488;
+  --teal-dark:#0F766E;
+  --amber:#B9770E;
+  --high:#0F766E;
+  --med:#B9770E;
+  --low:#94A3B8;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);
+  color:var(--ink);
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- Top bar ---------- */
+.topbar{
+  background:var(--surface);
+  border-bottom:1px solid var(--line);
+  padding:1rem 2rem;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  position:sticky;
+  top:0;
+  z-index:100;
+}
+.brand{display:flex;flex-direction:column;}
+.brand h1{
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:700;
+  font-size:1.35rem;
+  letter-spacing:-0.5px;
+  line-height:1.1;
+}
+.brand h1 span{color:var(--teal);}
+.brand p{
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:600;
+  font-size:0.8rem;
+  color:var(--ink-soft);
+}
+.topstats{display:flex;gap:1.8rem;}
+.tstat{text-align:right;}
+.tstat .n{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:1.05rem;}
+.tstat .l{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--ink-faint);}
+.api-dot{
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--ink-faint);margin-left:0.4rem;vertical-align:middle;
+}
+.api-dot.live{background:var(--teal);}
+.api-dot.down{background:#DC2626;}
+
+/* ---------- Hero / search ---------- */
+.hero{
+  max-width:900px;margin:0 auto;padding:3rem 2rem 1.5rem;
+}
+.hero-title{
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:700;
+  font-size:2.4rem;
+  letter-spacing:-1.5px;
+  line-height:1.1;
+  margin-bottom:0.6rem;
+}
+.hero-title span{color:var(--teal);}
+.hero-sub{
+  font-size:1.02rem;color:var(--ink-soft);max-width:620px;margin-bottom:2rem;
+}
+.searchbar{
+  display:flex;gap:0.7rem;margin-bottom:0.8rem;
+}
+.searchbar input{
+  flex:1;
+  background:var(--surface);
+  border:1px solid #CBD5E1;
+  border-radius:11px;
+  padding:0.95rem 1.2rem;
+  font-size:1.05rem;
+  font-family:'IBM Plex Mono',monospace;
+  color:var(--ink);
+  transition:border-color .15s, box-shadow .15s;
+}
+.searchbar input:focus{
+  outline:none;border-color:var(--teal);
+  box-shadow:0 0 0 3px rgba(13,148,136,0.12);
+}
+.searchbar input::placeholder{color:var(--ink-faint);font-family:'Inter',sans-serif;}
+.searchbar button{
+  background:var(--ink);color:#fff;border:none;border-radius:11px;
+  padding:0 2rem;font-weight:600;font-size:1rem;cursor:pointer;
+  transition:background .15s;
+}
+.searchbar button:hover{background:#1E293B;}
+.searchbar button:disabled{background:var(--ink-faint);cursor:not-allowed;}
+.hint{font-size:0.82rem;color:var(--ink-faint);}
+.hint b{color:var(--teal);cursor:pointer;font-weight:600;}
+.hint b:hover{text-decoration:underline;}
+
+/* ---------- Results ---------- */
+.results{max-width:900px;margin:0 auto;padding:0 2rem 4rem;}
+.parsed{
+  font-family:'IBM Plex Mono',monospace;font-size:0.85rem;color:var(--ink-soft);
+  margin:1.2rem 0 0.3rem;
+}
+.parsed b{color:var(--teal);}
+.resbar{font-size:0.9rem;color:var(--ink-soft);margin:0.8rem 0 1.2rem;}
+.resbar b{color:var(--ink);}
+
+.card{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:1.3rem 1.5rem;
+  margin-bottom:0.9rem;
+  transition:box-shadow .15s, transform .15s;
+}
+.card:hover{box-shadow:0 4px 16px rgba(15,23,42,0.06);}
+.card.top{border-left:3px solid var(--teal);}
+.crow{display:flex;align-items:center;gap:1rem;}
+.rank{
+  font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:0.95rem;
+  color:var(--ink-faint);min-width:32px;
+}
+.rank.hi{color:var(--teal);}
+.cname{font-size:1.25rem;font-weight:700;font-family:'Space Grotesk',sans-serif;}
+.cid{font-family:'IBM Plex Mono',monospace;font-size:0.75rem;color:var(--ink-faint);margin-left:0.4rem;}
+.score{margin-left:auto;text-align:right;}
+.score .n{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:1.6rem;line-height:1;}
+.score .l{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--ink-faint);margin-top:3px;}
+
+.metrics{display:flex;margin-top:1.1rem;border:1px solid #EEF2F6;border-radius:9px;overflow:hidden;}
+.metric{flex:1;padding:0.65rem 1rem;border-right:1px solid #EEF2F6;background:#FAFBFC;}
+.metric:last-child{border-right:none;}
+.metric .v{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:1rem;}
+.metric .v.teal{color:var(--teal);}
+.metric .k{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-faint);margin-top:1px;}
+
+.contrib{display:flex;gap:8px;margin-top:1rem;flex-wrap:wrap;}
+.cbox{border:1px solid var(--line);border-radius:9px;padding:6px 11px;min-width:84px;}
+.cbox .cn{font-family:'IBM Plex Mono',monospace;font-size:0.62rem;text-transform:uppercase;letter-spacing:0.4px;color:var(--ink-faint);}
+.cbox .cl{font-weight:700;font-size:0.8rem;margin-top:2px;}
+.cl.high{color:var(--high);}
+.cl.med{color:var(--med);}
+.cl.low{color:var(--low);}
+.cl.none{color:#CBD5E1;}
+
+.evidence{
+  margin-top:1rem;padding-top:1rem;border-top:1px solid #EEF2F6;
+  font-size:0.87rem;color:var(--ink-soft);
+}
+.evidence b{color:var(--ink);}
+.evidence .disease{color:var(--teal);font-weight:600;}
+
+/* ---------- States ---------- */
+.state{
+  max-width:900px;margin:2rem auto;padding:2.5rem 2rem;text-align:center;
+  background:var(--surface);border:1px solid var(--line);border-radius:14px;
+}
+.state h3{font-family:'Space Grotesk',sans-serif;font-size:1.2rem;margin-bottom:0.5rem;}
+.state p{color:var(--ink-soft);font-size:0.95rem;max-width:520px;margin:0 auto;}
+.state code{
+  font-family:'IBM Plex Mono',monospace;background:var(--bg);
+  padding:2px 7px;border-radius:5px;font-size:0.85rem;color:var(--teal-dark);
+}
+.spinner{
+  width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--teal);
+  border-radius:50%;margin:0 auto 1rem;animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+.hidden{display:none;}
+
+@media(max-width:640px){
+  .topstats{display:none;}
+  .hero-title{font-size:1.8rem;}
+  .searchbar{flex-direction:column;}
+  .searchbar button{padding:0.85rem;}
+  .topbar,.hero,.results{padding-left:1.2rem;padding-right:1.2rem;}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <h1>CellLine<span>Finder</span></h1>
+    <p>Multi-omics cell line recommendation</p>
+  </div>
+  <div class="topstats">
+    <div class="tstat"><div class="n">2,076</div><div class="l">cell lines</div></div>
+    <div class="tstat"><div class="n">4</div><div class="l">datasets</div></div>
+    <div class="tstat"><div class="n">API<span class="api-dot" id="apiDot"></span></div><div class="l">status</div></div>
+  </div>
+</div>
+
+<div class="hero">
+  <div class="hero-title">Find the right <span>cell line</span> for your gene.</div>
+  <div class="hero-sub">Enter a gene and get ranked human cell line recommendations, drawn from four datasets, with a transparent evidence breakdown for every result.</div>
+  <div class="searchbar">
+    <input type="text" id="geneInput" placeholder="Enter a gene, e.g. EGFR" autocomplete="off">
+    <button id="searchBtn">Find</button>
+  </div>
+  <div class="hint">Try: <b class="ex">EGFR</b> &nbsp; <b class="ex">TP53</b> &nbsp; <b class="ex">ERBB2</b> &nbsp; <b class="ex">KRAS</b></div>
+</div>
+
+<div class="results" id="results"></div>
+
+<div class="state" id="welcomeState">
+  <h3>Start with a gene</h3>
+  <p>Type a gene symbol above and press Find. CellLineFinder will rank the cell lines that best express it, combining evidence across the Human Protein Atlas, DepMap, GEO, and proteomics data.</p>
+</div>
+
+<div class="state hidden" id="loadingState">
+  <div class="spinner"></div>
+  <p>Searching across four datasets…</p>
+</div>
+
+<div class="state hidden" id="errorState">
+  <h3>Can't reach the recommendation service</h3>
+  <p>The backend API isn't responding. Make sure it's running with <code>uvicorn api.main:app --port 8000</code> in your project folder, then try again.</p>
+</div>
+
+<div class="state hidden" id="emptyState">
+  <h3>No results found</h3>
+  <p id="emptyMsg">No cell lines matched that gene. Check the gene symbol and try again.</p>
+</div>
+
+<script>
+const API_BASE = "http://localhost:8000";
+const $ = (id) => document.getElementById(id);
+
+// Check API health on load
+async function checkApi(){
+  try{
+    const r = await fetch(`${API_BASE}/health`, {signal: AbortSignal.timeout(3000)});
+    $("apiDot").className = "api-dot " + (r.ok ? "live" : "down");
+  }catch{
+    $("apiDot").className = "api-dot down";
+  }
+}
+checkApi();
+
+function showOnly(stateId){
+  ["welcomeState","loadingState","errorState","emptyState"].forEach(s=>{
+    $(s).classList.toggle("hidden", s !== stateId);
+  });
+  if(stateId === null){
+    ["welcomeState","loadingState","errorState","emptyState"].forEach(s=>$(s).classList.add("hidden"));
+  }
+}
+
+function contribBox(label, score){
+  let lvl, cls;
+  if(score === null || score === undefined){ lvl="No data"; cls="none"; }
+  else if(score >= 0.66){ lvl="High"; cls="high"; }
+  else if(score >= 0.33){ lvl="Medium"; cls="med"; }
+  else{ lvl="Low"; cls="low"; }
+  return `<div class="cbox"><div class="cn">${label}</div><div class="cl ${cls}">${lvl}</div></div>`;
+}
+
+function renderResults(data, gene){
+  const results = data.results || [];
+  const total = (data.metadata && data.metadata.total_candidates) || results.length;
+  if(results.length === 0){
+    $("emptyMsg").textContent = `No cell lines matched ${gene}. Check the gene symbol and try again.`;
+    showOnly("emptyState");
+    return;
+  }
+  showOnly(null);
+  let html = `<div class="parsed">Detected gene <b>${gene.toUpperCase()}</b></div>`;
+  html += `<div class="resbar">Showing top ${results.length} of <b>${total}</b> cell lines</div>`;
+
+  results.forEach((r, i) => {
+    const rank = r.rank || (i+1);
+    const isTop = rank <= 3;
+    const name = r.official_name || r.cellosaurus_id;
+    const cid = r.cellosaurus_id || "";
+    const finalScore = (r.final_score !== undefined && r.final_score !== null) ? Number(r.final_score).toFixed(2) : "—";
+    const expr = (r.expression_score !== undefined && r.expression_score !== null) ? Number(r.expression_score).toFixed(2)
+                : (r.expr_score !== undefined && r.expr_score !== null) ? Number(r.expr_score).toFixed(2) : "—";
+    const conf = (r.confidence !== undefined && r.confidence !== null) ? Math.round(Number(r.confidence)*100)+"%" : "—";
+    const nSources = r.n_sources !== undefined ? r.n_sources : (r.num_sources !== undefined ? r.num_sources : "—");
+
+    // per-dataset scores - try common field names
+    const scores = r.scores || r.dataset_scores || {};
+    const hpa = scores.hpa ?? r.hpa ?? null;
+    const depmap = scores.depmap ?? r.depmap ?? null;
+    const geo = scores.geo ?? r.geo ?? null;
+    const prot = scores.proteomics ?? scores.prot ?? r.prot ?? null;
+
+    const disease = r.disease || "";
+    const lineage = r.lineage || "";
+    let evParts = [];
+    if(disease) evParts.push(`<span class="disease">${disease}</span>`);
+    if(lineage) evParts.push(`${lineage} lineage`);
+    evParts.push(`expresses ${gene.toUpperCase()} across ${nSources} of 4 datasets`);
+
+    html += `
+      <div class="card ${isTop ? 'top' : ''}">
+        <div class="crow">
+          <span class="rank ${isTop ? 'hi' : ''}">${String(rank).padStart(2,'0')}</span>
+          <div><span class="cname">${name}</span><span class="cid">${cid}</span></div>
+          <div class="score"><div class="n">${finalScore}</div><div class="l">Fit score</div></div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><div class="v teal">${expr}</div><div class="k">Expression</div></div>
+          <div class="metric"><div class="v">${conf}</div><div class="k">Confidence</div></div>
+          <div class="metric"><div class="v">${nSources}/4</div><div class="k">Sources</div></div>
+        </div>
+        <div class="contrib">
+          ${contribBox("HPA RNA", hpa)}
+          ${contribBox("DepMap", depmap)}
+          ${contribBox("GEO", geo)}
+          ${contribBox("Proteomics", prot)}
+        </div>
+        ${evParts.length ? `<div class="evidence"><b>Evidence:</b> ${evParts.join(" · ")}.</div>` : ""}
+      </div>`;
+  });
+
+  $("results").innerHTML = html;
+}
+
+async function search(){
+  const gene = $("geneInput").value.trim();
+  if(!gene) return;
+  $("results").innerHTML = "";
+  showOnly("loadingState");
+  $("searchBtn").disabled = true;
+
+  try{
+    const r = await fetch(`${API_BASE}/recommend/classical`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ gene: gene, top_n: 10 }),
+      signal: AbortSignal.timeout(30000)
+    });
+    if(!r.ok) throw new Error("bad status " + r.status);
+    const data = await r.json();
+    $("apiDot").className = "api-dot live";
+    renderResults(data, gene);
+  }catch(err){
+    console.error(err);
+    $("apiDot").className = "api-dot down";
+    showOnly("errorState");
+  }finally{
+    $("searchBtn").disabled = false;
+  }
+}
+
+$("searchBtn").addEventListener("click", search);
+$("geneInput").addEventListener("keydown", (e)=>{ if(e.key === "Enter") search(); });
+document.querySelectorAll(".ex").forEach(b=>{
+  b.addEventListener("click", ()=>{ $("geneInput").value = b.textContent; search(); });
+});
+</script>
+</body>
+</html>
