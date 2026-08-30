@@ -151,6 +151,9 @@ body{
 .metrics-row .mv{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:1.05rem;}
 .metrics-row .mv.teal{color:var(--teal);}
 .metrics-row .mk{font-size:0.62rem;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.6px;margin-top:2px;}
+.why-section{margin-top:1rem;padding:0.9rem 1.1rem;background:var(--violet-soft);border-radius:12px;}
+.why-label{font-size:0.72rem;color:var(--violet);text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-bottom:0.35rem;}
+.why-text{font-size:0.9rem;color:var(--ink);line-height:1.55;}
 .expr-section{margin-top:1.2rem;padding-top:1.2rem;border-top:1px solid var(--line-soft);}
 .expr-label{font-size:0.72rem;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:0.7rem;font-weight:600;}
 .tracks{display:grid;grid-template-columns:repeat(4,1fr);gap:0.9rem;}
@@ -215,7 +218,7 @@ footer{max-width:1080px;margin:0 auto;padding:2rem;text-align:center;font-size:0
 <div class="hero">
   <div class="eyebrow">For gene-focused research</div>
   <h2>Find the <span class="stain">right cell line</span> for your gene.</h2>
-  <p class="lede">Enter a gene and see the human cell lines best suited to study it, ranked across four datasets, with the evidence behind every recommendation laid out clearly.</p>
+  <p class="lede">Enter a gene to identify the human cell lines best suited for studying it. Recommendations are ranked across four independent omics datasets, each with a transparent breakdown of the supporting evidence.</p>
 </div>
 
 <div class="searchzone">
@@ -327,6 +330,70 @@ function track(name, score){
 }
 function num(v, dp=2){ return (v!==undefined && v!==null && !isNaN(v)) ? Number(v).toFixed(dp) : "n/a"; }
 
+function buildWhy(r){
+  const ds = [
+    {k:"HPA RNA", v:r.hpa},
+    {k:"DepMap", v:r.depmap},
+    {k:"GEO", v:r.geo},
+    {k:"proteomics", v:r.proteomics}
+  ];
+  const has = ds.filter(d=>d.v!==null && d.v!==undefined && !isNaN(d.v));
+  const missing = ds.filter(d=>d.v===null || d.v===undefined || isNaN(d.v));
+  const strong = has.filter(d=>d.v>=0.66).map(d=>d.k);
+  const medium = has.filter(d=>d.v>=0.33 && d.v<0.66).map(d=>d.k);
+  const weak = has.filter(d=>d.v<0.33).map(d=>d.k);
+
+  const nsrc = r.n_sources;
+  const conf = r.confidence;
+  const expr = r.expression_score;
+  const fit = r.final_score;
+
+  let sentences = [];
+
+  // 1. Overall verdict
+  const fitPct = fit!=null ? Math.round(fit*100) : null;
+  if(fitPct!=null){
+    let verdict;
+    if(fit>=0.7) verdict = "a strong candidate";
+    else if(fit>=0.45) verdict = "a solid candidate";
+    else if(fit>=0.25) verdict = "a moderate candidate";
+    else verdict = "a weaker candidate";
+    sentences.push(`This cell line is ${verdict} for studying this gene, with an overall match score of ${(fit).toFixed(2)}.`);
+  }
+
+  // 2. What drove the expression
+  let exprParts = [];
+  if(strong.length) exprParts.push(`expresses the gene strongly in ${strong.join(", ")}`);
+  if(medium.length) exprParts.push(`moderately in ${medium.join(", ")}`);
+  if(weak.length) exprParts.push(`weakly in ${weak.join(", ")}`);
+  if(exprParts.length){
+    sentences.push(`It ${exprParts.join(", ")}.`);
+  }
+
+  // 3. Data coverage / robustness
+  if(nsrc!=null){
+    if(nsrc>=4){
+      sentences.push(`All four datasets had data for this cell line, so the evidence is well supported and consistent.`);
+    } else {
+      const missNames = missing.map(d=>d.k).join(", ");
+      sentences.push(`Only ${nsrc} of 4 datasets had data${missNames?` (missing: ${missNames})`:""}, so the picture is slightly less complete.`);
+    }
+  }
+
+  // 4. Confidence interpretation
+  if(conf!=null){
+    const cpct = Math.round(conf*100);
+    if(conf>=0.85) sentences.push(`Confidence is high (${cpct}%), meaning this cell line is well characterised across our nomenclature sources.`);
+    else if(conf>=0.5) sentences.push(`Confidence is moderate (${cpct}%) based on the available characterisation.`);
+    else sentences.push(`Confidence is lower (${cpct}%), so treat this recommendation with some caution.`);
+  }
+
+  // 5. How the score is built (transparency)
+  sentences.push(`The match score combines how strongly the gene is expressed (averaged across datasets) with how well characterised the cell line is.`);
+
+  return sentences.join(" ");
+}
+
 function renderResults(data, gene, excluded){
   const results = data.results || [];
   const total = (data.metadata && data.metadata.total_candidates) || results.length;
@@ -339,15 +406,16 @@ function renderResults(data, gene, excluded){
     const name = r.official_name || r.cellosaurus_id || "Unknown";
     const cvcl = r.cellosaurus_id || "";
     const fit = num(r.final_score);
-    const rna = r.rna_score;
-    const protein = r.protein_score;
-    const quality = r.quality_score;
-    const context = r.context_score;
-    const geoConf = r.geo_confirmation;
-    const expr = num(rna);
-    const conf = (quality!==undefined&&quality!==null&&!isNaN(quality)) ? Math.round(quality*100)+"%" : "n/a";
+    const hpa = r.hpa;
+    const depmap = r.depmap;
+    const geo = r.geo;
+    const prot = r.proteomics;
+    const expr = num(r.expression_score);
+    const conf = (r.confidence!==undefined&&r.confidence!==null&&!isNaN(r.confidence)) ? Math.round(r.confidence*100)+"%" : "n/a";
     const nsrc = r.n_sources ?? "n/a";
-    const geneClass = r.gene_class || "";
+    const evc = r.evidence_count;
+    const evidence = (evc!==null && evc!==undefined) ? evc+"/3" : "n/a";
+    const geneClass = "";
     const disease = r.disease || ""; const lineage = r.lineage || "";
     let tags = "";
     if(disease) tags += `<span class="tag disease">${disease}</span>`;
@@ -358,18 +426,22 @@ function renderResults(data, gene, excluded){
       <div class="chead">
         <div class="cellicon"><span class="rank-num">${rank}</span></div>
         <div class="cinfo"><div class="cname">${name}</div><div class="cvcl">${cvcl}</div></div>
-        <div class="cscore"><div class="sv">${fit}</div><div class="sl">Fit score</div></div>
+        <div class="cscore"><div class="sv">${fit}</div><div class="sl">Match score</div></div>
       </div>
       <div class="tags">${tags}</div>
       <div class="metrics-row">
-        <div class="metric"><div class="mv teal">${expr}</div><div class="mk">RNA score</div></div>
-        <div class="metric"><div class="mv">${conf}</div><div class="mk">Quality</div></div>
+        <div class="metric"><div class="mv teal">${expr}</div><div class="mk">Expression</div></div>
+        <div class="metric"><div class="mv">${conf}</div><div class="mk">Confidence</div></div>
         <div class="metric"><div class="mv">${nsrc}/4</div><div class="mk">Sources</div></div>
-        <div class="metric"><div class="mv">${num(protein)}</div><div class="mk">Protein</div></div>
+        <div class="metric"><div class="mv">${evidence}</div><div class="mk">Evidence</div></div>
       </div>
       <div class="expr-section">
-        <div class="expr-label">Evidence breakdown by signal</div>
-        <div class="tracks">${track("RNA",rna)}${track("Protein",protein)}${track("Quality",quality)}${track("GEO",geoConf)}</div>
+        <div class="expr-label">Expression evidence by dataset</div>
+        <div class="tracks">${track("HPA RNA",hpa)}${track("DepMap",depmap)}${track("GEO",geo)}${track("Proteomics",prot)}</div>
+      </div>
+      <div class="why-section">
+        <div class="why-label">Why this match score?</div>
+        <div class="why-text">${buildWhy(r)}</div>
       </div>
     </div>`;
   });
