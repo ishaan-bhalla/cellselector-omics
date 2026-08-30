@@ -38,7 +38,7 @@ def rank(
     lineage_filter: str | None = None,
     top_n: int | None = 10,
     weights: dict | None = None,
-    use_learned_weights: bool = True,
+    use_learned_weights: bool = False,
     expression_threshold: bool = True,
     exclude_genes: list[str] | None = None,
     include_alternatives: bool = False,
