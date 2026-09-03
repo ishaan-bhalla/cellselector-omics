@@ -54,3 +54,21 @@ class TestRank:
         # This should be caught at the API level, but test the logic
         result = rank("EGFR", exclude_genes=["EGFR"], top_n=5)
         # Either returns empty or the API should reject this
+
+    class TestExplain:
+    """Test the explanation generator."""
+    
+    def test_returns_string(self):
+        result = rank("EGFR", disease_filter="lung", top_n=1)
+        if len(result) > 0:
+            explanation = explain(result.iloc[0])
+            assert isinstance(explanation, str)
+            assert len(explanation) > 0
+    
+    def test_includes_cell_line_name(self):
+        result = rank("EGFR", disease_filter="lung", top_n=1)
+        if len(result) > 0:
+            explanation = explain(result.iloc[0])
+            name = result.iloc[0]["official_name"]
+            assert name in explanation
+
