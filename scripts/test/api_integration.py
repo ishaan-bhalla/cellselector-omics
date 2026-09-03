@@ -94,3 +94,66 @@ class TestClassicalRecommendation:
         text = response.text
         assert "NaN" not in text
         assert "Infinity" not in text
+
+class TestExport:
+    def test_json_export(self):
+        # First create a session
+        response = client.post("/recommend/classical", json={
+            "gene": "EGFR", "top_n": 3
+        })
+        session_id = response.json()["session_id"]
+        
+        export_resp = client.get(
+            f"/recommend/export/json?session_id={session_id}"
+        )
+        assert export_resp.status_code == 200
+    
+    def test_csv_export(self):
+        response = client.post("/recommend/classical", json={
+            "gene": "EGFR", "top_n": 3
+        })
+        session_id = response.json()["session_id"]
+        
+        export_resp = client.get(
+            f"/recommend/export/csv?session_id={session_id}"
+        )
+        assert export_resp.status_code == 200
+    
+    def test_pdf_export(self):
+        response = client.post("/recommend/classical", json={
+            "gene": "EGFR", "top_n": 3
+        })
+        session_id = response.json()["session_id"]
+        
+        export_resp = client.get(
+            f"/recommend/export/pdf?session_id={session_id}"
+        )
+        assert export_resp.status_code == 200
+    
+    def test_invalid_session_returns_error(self):
+        response = client.get(
+            "/recommend/export/pdf?session_id=nonexistent"
+        )
+        assert response.status_code in [400, 404]
+
+
+class TestGraphEndpoints:
+    def test_pathway_neighbors(self):
+        response = client.get("/graph/pathway-neighbors/EGFR")
+        assert response.status_code == 200
+        data = response.json()
+        assert "neighbors" in data
+    
+    def test_cell_lines_via_pathway(self):
+        response = client.get(
+            "/graph/cell-lines-via-pathway/EGFR?top_k=5"
+        )
+        assert response.status_code == 200
+
+
+class TestBrowseEndpoint:
+    def test_cell_lines_list(self):
+        response = client.get("/cell-lines")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) > 0
