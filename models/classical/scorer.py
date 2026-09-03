@@ -13,11 +13,19 @@ from config import (
     SAMPLE_INFO,
 )
 
+# NOTE: 0.30+0.15+0.20+0.15+0.10 = 0.90, not the 1.00 stated when these
+# were given — same gap as the previous FIXED_WEIGHTS revision, just with
+# different individual numbers. geo_confirmation adds ±0.10 on top
+# (additive, not part of this weighted sum), so a perfect score with a GEO
+# confirmation bonus still reaches 1.00; without GEO data, the ceiling is
+# 0.90. Kept these exact values rather than silently rescaling them —
+# flagging again since the arithmetic still doesn't match the stated intent.
 FIXED_WEIGHTS = {
-    "rna":     0.50,
-    "protein": 0.10,
-    "quality": 0.25,
+    "rna":     0.30,
+    "protein": 0.15,
+    "quality": 0.20,
     "context": 0.15,
+    "pathway": 0.10,
 }
 
 # GEO confirmation bonus/penalty — additive, not part of weighted sum

@@ -6,6 +6,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
+from models.classical.pathway_scorer import score_pathway_activity
 from models.classical.scorer import (
     FIXED_WEIGHTS,
     _level_label_with_percentile,
@@ -21,16 +22,31 @@ from models.classical.scorer import (
 # Re-export for external consumers (evaluate, weights_learned, etc.)
 __all__ = ["FIXED_WEIGHTS", "rank", "explain"]
 
-_CACHED_LEARNED_WEIGHTS: dict | None = None
+_CACHED_LEARNED_WEIGHTS_BY_CLASS: dict | None = None
 
 
-def _get_learned_weights() -> dict:
-    global _CACHED_LEARNED_WEIGHTS
-    if _CACHED_LEARNED_WEIGHTS is None:
-        from models.classical.weights_learned import optimise_weights
-        print("[ranker] Computing learned weights (one-time, cached)...")
-        _CACHED_LEARNED_WEIGHTS = optimise_weights()
-    return _CACHED_LEARNED_WEIGHTS
+def _get_learned_weights_by_class() -> dict:
+    """
+    {tissue_specific, ubiquitous, loss_of_function} -> weights dict, cached
+    once per process. Pathway activity's value as a signal genuinely varies
+    by gene class (see weights_learned.optimise_weights_by_class), so
+    production scoring selects the class-appropriate weights per query
+    rather than one global set for every gene — otherwise the scoring
+    transparency panel's "tuned independently per gene class" claim
+    wouldn't actually be true of what's running.
+    """
+    global _CACHED_LEARNED_WEIGHTS_BY_CLASS
+    if _CACHED_LEARNED_WEIGHTS_BY_CLASS is None:
+        from models.classical.weights_learned import optimise_weights_by_class
+        print("[ranker] Computing per-gene-class learned weights (one-time, cached)...")
+        _CACHED_LEARNED_WEIGHTS_BY_CLASS = optimise_weights_by_class()
+    return _CACHED_LEARNED_WEIGHTS_BY_CLASS
+
+
+def _select_class_weights(weights_by_class: dict, gene_class: str) -> dict:
+    """loss_of_function falls back to tissue_specific when the validation
+    set has no dedicated LOF-only genes (see optimise_weights_by_class)."""
+    return weights_by_class.get(gene_class) or weights_by_class["tissue_specific"]
 
 
 def _quality_explanation(row) -> str:
@@ -101,6 +117,7 @@ def rank(
     exclude_genes: list[str] | None = None,
     include_alternatives: bool = False,
     alternatives_top_k: int = 3,
+    include_pathway: bool = True,
 ) -> pd.DataFrame:
     """
     Rank cell lines by suitability for studying a given gene.
@@ -110,7 +127,21 @@ def rank(
       + weights["protein"] * protein_score
       + weights["quality"] * quality_score
       + weights["context"] * context_score
+      + weights.get("pathway", 0.0) * pathway_activity_score
       + geo_confirmation_bonus  (additive ±0.10, not weighted)
+
+    pathway_activity_score: graph-enhanced signal (see
+        pathway_scorer.score_pathway_activity) — fraction of the target
+        gene's KEGG pathway neighbors (via Neo4j) that are ALSO expressed
+        in this cell line, not just the target gene in isolation. Only
+        meaningful for genes ingested into Neo4j (see
+        models/graph/ingest.py); for any other gene this degrades to 0.0
+        for every cell line rather than erroring. include_pathway=False
+        skips computing it entirely (score forced to 0.0 for every row,
+        which is rank-order-equivalent to omitting the term, since a
+        uniform per-gene offset doesn't change relative ranking) — used by
+        scripts/evaluation/compare_with_without_pathway.py for a
+        controlled A/B comparison.
 
     exclude_genes: optional list of gene symbols whose expression should
         penalise the final score. For each excluded gene, an expression score
@@ -148,11 +179,14 @@ def rank(
         vs_next_rank,
         exclusion_warning [, excluded_{g}_score, excluded_{g}_flag ...]
     """
+    gene_class = classify_gene(gene)
     if weights is None:
-        weights = _get_learned_weights() if use_learned_weights else FIXED_WEIGHTS
+        weights = (
+            _select_class_weights(_get_learned_weights_by_class(), gene_class)
+            if use_learned_weights else FIXED_WEIGHTS
+        )
 
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
-    gene_class = classify_gene(gene)
 
     rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl,
                                       gene_class=gene_class)
@@ -220,11 +254,35 @@ def rank(
         lambda r: _context_explanation(r, disease_filter, lineage_filter), axis=1
     )
 
+    # ── Pathway activity (graph-enhanced scoring) ────────────────────────────
+    # include_pathway=False intentionally skips the Neo4j call entirely
+    # (not just zeroing the weight) — used for the controlled with/without
+    # comparison in scripts/evaluation/compare_with_without_pathway.py.
+    if include_pathway:
+        try:
+            pathway_df = score_pathway_activity(
+                gene, cell_line_ids=set(result["cellosaurus_id"])
+            )
+            result = result.merge(pathway_df, on="cellosaurus_id", how="left")
+            result["pathway_activity_score"] = result["pathway_activity_score"].fillna(0.0)
+            result["pathway_genes_expressed"] = result["pathway_genes_expressed"].fillna(0).astype(int)
+            result["pathway_genes_total"] = result["pathway_genes_total"].fillna(0).astype(int)
+        except Exception as exc:
+            print(f"[ranker] Pathway scoring failed: {exc}")
+            result["pathway_activity_score"] = 0.0
+            result["pathway_genes_expressed"] = 0
+            result["pathway_genes_total"] = 0
+    else:
+        result["pathway_activity_score"] = 0.0
+        result["pathway_genes_expressed"] = 0
+        result["pathway_genes_total"] = 0
+
     result["final_score"] = (
         weights["rna"]     * result["rna_score"]
         + weights["protein"] * result["protein_score"]
         + weights["quality"] * result["quality_score"]
         + weights["context"] * result["context_score"]
+        + weights.get("pathway", 0.0) * result["pathway_activity_score"]
         + result["geo_confirmation"]   # additive, not weighted
     )
     result["final_score"] = result["final_score"].clip(0.0, 1.0)
@@ -279,6 +337,7 @@ def rank(
         "dependency_score", "dependency_percentile",
         "hpa_evidence", "depmap_evidence", "geo_evidence", "protein_evidence",
         "vs_next_rank", "quality_explanation", "context_explanation",
+        "pathway_activity_score", "pathway_genes_expressed", "pathway_genes_total",
     ]
     if exclude_genes:
         out_cols.append("exclusion_warning")
@@ -310,13 +369,15 @@ def explain_rank_difference(row_a: pd.Series, row_b: pd.Series, weights: dict) -
     row_a ranks above/below row_b: which weighted score component
     contributed the most to the gap, and by how much.
     """
-    components = ["rna", "protein", "quality", "context"]
+    components = ["rna", "protein", "quality", "context", "pathway"]
     diffs = []
     for comp in components:
-        col = f"{comp}_score"
+        col = f"{comp}_score" if comp != "pathway" else "pathway_activity_score"
         val_a = row_a.get(col, 0) or 0
         val_b = row_b.get(col, 0) or 0
-        weighted_diff = weights[comp] * (val_a - val_b)
+        # weights.get(...): learned weights don't carry a "pathway" key
+        # (see rank()'s docstring) — same 0.10 fallback used in final_score.
+        weighted_diff = weights.get(comp, 0.10) * (val_a - val_b)
         diffs.append((comp, val_a, val_b, weighted_diff))
 
     diffs.sort(key=lambda x: abs(x[3]), reverse=True)

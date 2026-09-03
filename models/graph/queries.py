@@ -39,7 +39,11 @@ def query_pathway_neighbor_genes(gene: str) -> list[dict]:
     ORDER BY pathway_count DESC
     LIMIT 50
     """
-    results = run_query(query, {"gene": gene})
+    try:
+        results = run_query(query, {"gene": gene})
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (query_pathway_neighbor_genes): {exc}")
+        return []
     return [
         {"gene": r["gene"], "shared_pathways": r["shared_pathways"]}
         for r in results
@@ -92,7 +96,11 @@ def query_best_cell_lines_via_pathway(
         }) AS pathway_connected
     RETURN direct + pathway_connected AS all_results
     """
-    results = run_query(query, {"gene": gene, "disease_filter": disease_filter})
+    try:
+        results = run_query(query, {"gene": gene, "disease_filter": disease_filter})
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (query_best_cell_lines_via_pathway): {exc}")
+        return []
     if not results:
         return []
 
@@ -144,53 +152,58 @@ def graph_to_json(gene: str) -> dict:
     nodes: dict[str, dict] = {gene: {"id": gene, "type": "gene", "role": "target"}}
     edges: list[dict] = []
 
-    target_lines = run_query(
-        """
-        MATCH (g:Gene {symbol: $gene})-[r:EXPRESSED_IN]->(c:CellLine)
-        RETURN c.cellosaurus_id AS cvcl, r.score AS score
-        """,
-        {"gene": gene},
-    )
-    for row in target_lines:
-        cvcl = row["cvcl"]
-        nodes[cvcl] = {"id": cvcl, "type": "cell_line"}
-        edges.append({"source": gene, "target": cvcl, "relation": "EXPRESSED_IN", "weight": row["score"]})
-
-    pathways = run_query(
-        """
-        MATCH (g:Gene {symbol: $gene})-[:MEMBER_OF]->(p:Pathway)
-        RETURN p.pathway_id AS id, p.name AS name, p.url AS url
-        """,
-        {"gene": gene},
-    )
-    for pw in pathways:
-        pid = pw["id"]
-        nodes[pid] = {"id": pid, "type": "pathway", "name": pw["name"], "url": pw["url"]}
-        edges.append({"source": gene, "target": pid, "relation": "MEMBER_OF"})
-
-        neighbors = run_query(
+    try:
+        target_lines = run_query(
             """
-            MATCH (p:Pathway {pathway_id: $pid})-[:CONTAINS]->(ng:Gene)
-            OPTIONAL MATCH (ng)-[r:EXPRESSED_IN]->(nc:CellLine)
-            RETURN ng.symbol AS gene, nc.cellosaurus_id AS cvcl, r.score AS score
+            MATCH (g:Gene {symbol: $gene})-[r:EXPRESSED_IN]->(c:CellLine)
+            RETURN c.cellosaurus_id AS cvcl, r.score AS score
             """,
-            {"pid": pid},
+            {"gene": gene},
         )
-        for row in neighbors:
-            ngene = row["gene"]
-            if ngene == gene:
-                continue
-            if ngene not in nodes:
-                nodes[ngene] = {"id": ngene, "type": "gene", "role": "pathway_neighbor"}
-                edges.append({"source": pid, "target": ngene, "relation": "CONTAINS"})
+        for row in target_lines:
+            cvcl = row["cvcl"]
+            nodes[cvcl] = {"id": cvcl, "type": "cell_line"}
+            edges.append({"source": gene, "target": cvcl, "relation": "EXPRESSED_IN", "weight": row["score"]})
 
-            ncvcl = row["cvcl"]
-            if ncvcl:
-                nodes[ncvcl] = {"id": ncvcl, "type": "cell_line"}
-                edges.append({
-                    "source": ngene, "target": ncvcl,
-                    "relation": "EXPRESSED_IN", "weight": row["score"],
-                })
+        pathways = run_query(
+            """
+            MATCH (g:Gene {symbol: $gene})-[:MEMBER_OF]->(p:Pathway)
+            RETURN p.pathway_id AS id, p.name AS name, p.url AS url
+            """,
+            {"gene": gene},
+        )
+        for pw in pathways:
+            pid = pw["id"]
+            nodes[pid] = {"id": pid, "type": "pathway", "name": pw["name"], "url": pw["url"]}
+            edges.append({"source": gene, "target": pid, "relation": "MEMBER_OF"})
+
+            neighbors = run_query(
+                """
+                MATCH (p:Pathway {pathway_id: $pid})-[:CONTAINS]->(ng:Gene)
+                OPTIONAL MATCH (ng)-[r:EXPRESSED_IN]->(nc:CellLine)
+                RETURN ng.symbol AS gene, nc.cellosaurus_id AS cvcl, r.score AS score
+                """,
+                {"pid": pid},
+            )
+            for row in neighbors:
+                ngene = row["gene"]
+                if ngene == gene:
+                    continue
+                if ngene not in nodes:
+                    nodes[ngene] = {"id": ngene, "type": "gene", "role": "pathway_neighbor"}
+                    edges.append({"source": pid, "target": ngene, "relation": "CONTAINS"})
+
+                ncvcl = row["cvcl"]
+                if ncvcl:
+                    nodes[ncvcl] = {"id": ncvcl, "type": "cell_line"}
+                    edges.append({
+                        "source": ngene, "target": ncvcl,
+                        "relation": "EXPRESSED_IN", "weight": row["score"],
+                    })
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (graph_to_json): {exc}")
+        # Fall through with whatever nodes/edges were gathered before the
+        # failure (at minimum, the target gene node itself).
 
     node_list = list(nodes.values())
     return {

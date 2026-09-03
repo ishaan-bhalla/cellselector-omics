@@ -156,6 +156,7 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
           { label: 'PROTEIN', val: result.protein_score },
           { label: 'QUALITY', val: result.quality_score },
           { label: 'CONTEXT', val: result.context_score },
+          { label: 'PATHWAY', val: result.pathway_activity_score },
         ].map(({ label, val }) => (
           <span key={label} className="bg-[#F5F5F7] text-[#6E6E73] text-xs px-2 py-0.5 rounded font-mono">
             {(val ?? 0).toFixed(2)} {label}
@@ -246,6 +247,14 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
             {result.context_explanation && (
               <div className="text-xs text-gray-400 pl-3 mt-0.5">
                 └─ {result.context_explanation}
+              </div>
+            )}
+          </div>
+          <div>
+            <ScoreBar label="Pathway" value={result.pathway_activity_score ?? 0} />
+            {result.pathway_genes_total > 0 && (
+              <div className="text-xs text-gray-400 pl-3 mt-0.5">
+                └─ {result.pathway_genes_expressed}/{result.pathway_genes_total} pathway-neighbor genes also expressed here
               </div>
             )}
           </div>

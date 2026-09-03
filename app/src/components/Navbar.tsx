@@ -67,8 +67,6 @@ export default function Navbar() {
         <div style={PILL_STYLE}>
           {[
             { to: '/',       label: 'Home',   end: true  },
-            { to: '/browse', label: 'Browse', end: false },
-            { to: '/graph',  label: 'Graph',  end: false },
             { to: '/about',  label: 'About',  end: false },
           ].map(({ to, label, end }) => (
             <NavLink

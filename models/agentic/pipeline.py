@@ -212,6 +212,7 @@ def run(
                 "quality_score":    float(row.get("quality_score") or 0),
                 "context_score":    float(row.get("context_score") or 0),
                 "geo_confirmation": float(row.get("geo_confirmation") or 0),
+                "pathway_activity_score": float(row.get("pathway_activity_score") or 0),
             },
             "evidence":       evidence,
             "justification":  justification,
