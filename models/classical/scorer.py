@@ -361,6 +361,9 @@ def score_crispr_dependency(gene: str) -> pd.DataFrame:
         columns=["cellosaurus_id", "dependency_score", "dependency_percentile"]
     )
 
+    import os as _os
+    if not _os.path.exists(PARQUET_DIR / "crispr_dependency_depmap_preprocessed.parquet"):
+        return _empty
     crispr_raw = pd.read_parquet(
         PARQUET_DIR / "crispr_dependency_depmap_preprocessed.parquet",
         filters=[("gene_symbol", "=", gene)],

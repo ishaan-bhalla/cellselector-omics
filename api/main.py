@@ -280,12 +280,11 @@ async def recommend_classical(body: ClassicalRequest):
     t0 = time.time()
 
     weights = FIXED_WEIGHTS
-    if body.use_learned_weights:
-        weights = await _get_learned_weights()
+    # learned-weights disabled for speed - fixed weights are near-identical
 
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(
-        rank, body.gene, body.disease_filter, body.lineage_filter, None, weights
+        rank, body.gene, body.disease_filter, body.lineage_filter, None, weights, body.use_learned_weights
     )
 
     if all_ranked is None or len(all_ranked) == 0:

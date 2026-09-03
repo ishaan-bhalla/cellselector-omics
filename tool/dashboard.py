@@ -186,9 +186,9 @@ def recommend(gene, disease_filter=None, top_n=10, exclude_genes=None):
                 r=r.merge(excl_df.rename(columns={"excl_score":ecol}),on="cellosaurus_id",how="left")
             if ecol not in r.columns: r[ecol]=0.0
             else: r[ecol]=r[ecol].fillna(0.0)
-            r[f"excl_{eg}_flag"]=r[ecol]>0.5
-            r["final_score"]=(r["final_score"]*(1.0-r[ecol]*0.5)).clip(0.0,1.0)
-        r["exclusion_warning"]=r[[f"excl_{g}_flag" for g in exclude_genes]].any(axis=1)
+            # REMOVE cells that express the excluded gene above threshold
+            r=r[r[ecol]<=0.5]
+        r["exclusion_warning"]=False
     else:
         r["exclusion_warning"]=False
     return r.sort_values("final_score",ascending=False).head(top_n),len(r)
@@ -222,20 +222,8 @@ def load_all():
 # ---------- Header ----------
 st.markdown('<div class="head"><div class="brand"><div class="bt"><h1>CellLine<span>Finder</span></h1><p>Multi-omics cell line recommendation</p></div></div><div class="headstats"><div class="hs"><div class="n">2,076</div><div class="l">cell lines</div></div><div class="hs"><div class="n">4</div><div class="l">datasets</div></div><div class="hs"><div class="n">4/5</div><div class="l">validated</div></div></div></div>', unsafe_allow_html=True)
 
-# ---------- Navigation ----------
-st.markdown("""
-<style>
-div[data-testid="stSegmentedControl"] button{font-weight:600 !important;font-size:0.95rem !important;}
-</style>
-""", unsafe_allow_html=True)
-page = st.segmented_control("nav", ["Search", "All Cell Lines"], default="Search", label_visibility="collapsed")
-if page is None:
-    page = st.session_state.get("page", "Search")
-st.session_state.page = page
-st.write("")
-
 # ---------- SEARCH PAGE ----------
-if st.session_state.page=="Search":
+if True:
     sc1,sc2=st.columns([4,1])
     query=sc1.text_input("q", value="show me EGFR lung cancer lines", label_visibility="collapsed", placeholder="Enter a gene or ask in plain English").strip()
     sc2.button("Find", key="do_search", use_container_width=True, type="primary")
@@ -338,16 +326,3 @@ if st.session_state.page=="Search":
                                 chips="".join(f'<span class="alt-chip">{dt}</span>' for dt in shared[:4])
                                 rows_html+=f'<div class="alt-row"><span class="alt-sim">{sim:.2f}</span><div><span class="alt-name">{aname}</span><span class="alt-cid">{acid}</span><div class="alt-reason">{reason}</div></div><div class="alt-chips">{chips}</div></div>'
                             st.markdown(f'<div style="padding:0.2rem 0">{rows_html}</div>', unsafe_allow_html=True)
-
-# ---------- ALL CELL LINES PAGE ----------
-else:
-    st.markdown("#### All cell lines")
-    st.caption("Browse and download every cell line in the dataset with its data coverage and confidence.")
-    alldf=load_all()
-    fq=st.text_input("f", placeholder="Filter by cell line, disease or lineage", label_visibility="collapsed").strip().lower()
-    vw=alldf
-    if fq:
-        vw=alldf[alldf.apply(lambda r: fq in str(r["Cell line"]).lower() or fq in str(r["Disease"]).lower() or fq in str(r["Lineage"]).lower(), axis=1)]
-    st.markdown(f'<div class="resbar">Showing <b>{len(vw)}</b> of {len(alldf)} cell lines</div>', unsafe_allow_html=True)
-    st.dataframe(vw, use_container_width=True, hide_index=True, height=520)
-    st.download_button("Download as CSV", vw.to_csv(index=False).encode("utf-8"), "all_cell_lines.csv", "text/csv")
