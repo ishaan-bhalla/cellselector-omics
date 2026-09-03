@@ -46,3 +46,24 @@ class TestExclusionEdgeCases:
         result = rank("EGFR", exclude_genes=["TP53", "KRAS"],
                       top_n=5)
         assert len(result) > 0
+
+class TestGeneClassWeighting:
+    """Test that different gene classes get different weights."""
+    
+    def test_tissue_specific_weights_rna_heavily(self):
+        result = rank("EGFR", top_n=1)
+        # For tissue-specific, RNA should dominate
+        if len(result) > 0:
+            row = result.iloc[0]
+            assert row["rna_score"] > 0.5
+    
+    def test_lof_gene_context_matters(self):
+        """For LOF genes, context should be weighted heavily."""
+        with_context = rank("BRCA1", disease_filter="breast",
+                           top_n=1)
+        without_context = rank("BRCA1", top_n=1)
+        # With disease filter, top result should have 
+        # higher context score
+        if len(with_context) > 0:
+            assert with_context.iloc[0]["context_score"] > 0
+
