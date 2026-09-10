@@ -22,7 +22,9 @@ Your job is to:
 3. Flag any trade-offs or concerns
 4. Suggest what type of experiment it suits best
 Be concise, precise, and scientifically accurate. Use plain English that \
-a bench scientist can act on. Never make up data — only use what is provided."""
+a bench scientist can act on. Never make up data — only use what is provided. \
+When the evidence states which data sources are missing, report exactly those \
+— do not soften, generalise, or invent data coverage."""
 
 
 def _chat(prompt: str) -> str:
@@ -82,7 +84,12 @@ Provide your answer in exactly this format:
 1. RECOMMENDATION: (Strongly Recommended / Recommended / Use with Caution / Not Recommended)
 2. KEY REASON: (one sentence — the single most important factor)
 3. EVIDENCE SUMMARY: (2-3 sentences on the expression data)
-4. TRADE-OFFS: (any concerns or limitations to flag)
+4. TRADE-OFFS: (concerns and limitations, in prose. Your first sentence must \
+name the data sources from the "MISSING SOURCES" line of the DATA COVERAGE \
+section — those exact source names and only those, written into a normal \
+sentence (do NOT copy the bracketed [MISSING]/[PRESENT] list). If that line \
+says "none", write "All five evidence sources have data for this pair." Then \
+add any other genuine limitations.)
 5. BEST FOR: (what experiment type suits this cell line best)"""
 
     return _chat(prompt)

@@ -71,24 +71,46 @@ def _parse_justification(text: str) -> dict:
 
 
 def _verification_notes(evidence: dict) -> list[str]:
-    """Derive data-quality caveats from evidence dict."""
+    """
+    Structured data-gap caveats, from the SAME data_coverage the LLM prompt
+    gets (retriever section 6b) so the JSON's notes and the generated
+    TRADE-OFFS text can't disagree. Attached to each result in run().
+    """
     from models.classical.scorer import classify_gene
 
     notes = []
-    if classify_gene(evidence.get("gene", "")) == "loss_of_function" and not evidence.get("mutation"):
+    gene = evidence.get("gene", "")
+    has_mut_calls = bool(evidence.get("metadata", {}).get("has_mutations"))
+    if classify_gene(gene) == "loss_of_function" and not evidence.get("mutation"):
+        if has_mut_calls:
+            notes.append(
+                f"{gene} is a loss-of-function target; this line HAS somatic "
+                f"variant calls and none damage {gene} — likely wild-type, a "
+                f"control rather than a disease model"
+            )
+        else:
+            notes.append(
+                f"{gene} is a loss-of-function target, but this line has NO "
+                f"somatic variant calls — its {gene} mutation status is UNKNOWN, "
+                f"not confirmed wild-type"
+            )
+    if not has_mut_calls:
         notes.append(
-            f"{evidence.get('gene')} is a loss-of-function target but no damaging "
-            f"variant was called in this line — it is likely wild-type and serves "
-            f"as a control, not a disease model"
+            "No somatic variant calls for this cell line — mutation-status "
+            "claims (wild-type or mutant) cannot be made from this data"
         )
-    if not evidence.get("hpa_expression") and not evidence.get("depmap_expression"):
-        notes.append("No primary RNA expression data available")
+
+    cov = evidence.get("data_coverage", {})
+    missing = [src for src, c in cov.items() if not c["present"]]
+    if missing:
+        notes.append("Missing evidence sources for this gene/cell-line pair: "
+                     + ", ".join(missing))
+    if not cov.get("HPA RNA expression", {}).get("present") \
+            and not cov.get("DepMap RNA expression", {}).get("present"):
+        notes.append("No primary RNA expression data (HPA and DepMap both absent)")
+
     if evidence.get("scores", {}).get("geo_confirmation", 0) < 0:
         notes.append("GEO data contradicts primary RNA sources — treat with caution")
-    if not evidence.get("proteomics"):
-        notes.append("No proteomics data available for this cell line")
-    if not evidence.get("geo_expression"):
-        notes.append("No GEO validation data found")
     if not evidence.get("literature"):
         notes.append("No PubMed literature found for this gene/cell-line pair")
     return notes
@@ -224,6 +246,8 @@ def run(
             },
             "evidence":       evidence,
             "justification":  justification,
+            "verification_notes": _verification_notes(evidence),
+            "data_coverage":  evidence.get("data_coverage", {}),
             "exclusion_info": exclusion_info,
             "alternatives":   alternatives_map.get(cvcl, []),
         })
