@@ -382,12 +382,18 @@ def score_protein_expression(gene: str, ach_to_cvcl: dict) -> pd.DataFrame:
         columns=["original_id", "expression_value"],
     )
     if len(prot_raw) == 0:
-        return pd.DataFrame(columns=["cellosaurus_id", "protein_score"])
+        return pd.DataFrame({
+            "cellosaurus_id": pd.Series(dtype="object"),
+            "protein_score":  pd.Series(dtype="float64"),
+        })
 
     prot_raw["cellosaurus_id"] = prot_raw["original_id"].map(ach_to_cvcl)
     prot_raw = prot_raw.dropna(subset=["cellosaurus_id"])
     if len(prot_raw) == 0:
-        return pd.DataFrame(columns=["cellosaurus_id", "protein_score"])
+        return pd.DataFrame({
+            "cellosaurus_id": pd.Series(dtype="object"),
+            "protein_score":  pd.Series(dtype="float64"),
+        })
 
     agg = prot_raw.groupby("cellosaurus_id")["expression_value"].mean()
     return pd.DataFrame({"cellosaurus_id": agg.index, "protein_score": _pct_rank(agg)})

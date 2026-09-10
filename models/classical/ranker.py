@@ -246,17 +246,21 @@ def rank(
         }
     )
 
-    result["rna_score"]       = result["rna_score"].fillna(0.0)
-    result["protein_score"]   = result["protein_score"].fillna(0.0)
-    result["geo_confirmation"] = result["geo_confirmation"].fillna(0.0)
+    # astype(float): a left-merge against an empty score frame (e.g. a gene
+    # with no CCLE proteomics) yields an object-dtype all-NaN column;
+    # .fillna(0.0) then leaves it object-dtype, which propagates into
+    # final_score and breaks numeric ops like .describe() downstream.
+    result["rna_score"]        = result["rna_score"].fillna(0.0).astype(float)
+    result["protein_score"]    = result["protein_score"].fillna(0.0).astype(float)
+    result["geo_confirmation"]  = result["geo_confirmation"].fillna(0.0).astype(float)
 
     quality_df = score_data_quality(all_cvcl, rna_df, protein_df)
     result = result.merge(quality_df, on="cellosaurus_id", how="left")
-    result["quality_score"] = result["quality_score"].fillna(0.0)
+    result["quality_score"] = result["quality_score"].fillna(0.0).astype(float)
 
     context_df = score_context(all_cvcl, disease_filter, lineage_filter)
     result = result.merge(context_df, on="cellosaurus_id", how="left")
-    result["context_score"] = result["context_score"].fillna(0.0)
+    result["context_score"] = result["context_score"].fillna(0.0).astype(float)
 
     # ── Plain-English explanations for the two composite scores — these
     # blend multiple signals into one number, which is exactly why they
@@ -297,7 +301,7 @@ def rank(
     try:
         mutation_df = score_mutation_impact(gene)
         result = result.merge(mutation_df, on="cellosaurus_id", how="left")
-        result["mutation_impact_score"] = result["mutation_impact_score"].fillna(0.0)
+        result["mutation_impact_score"] = result["mutation_impact_score"].fillna(0.0).astype(float)
         result["mutation_detail"] = result["mutation_detail"].fillna("")
     except Exception as exc:
         print(f"[ranker] Mutation scoring failed: {exc}")
