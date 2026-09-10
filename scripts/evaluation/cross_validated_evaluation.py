@@ -6,10 +6,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import numpy as np
 
 from config import OUTPUTS_DIR
-from models.classical.scorer import classify_gene, load_mappings
+from models.classical.scorer import classify_gene, load_mappings, rank_sort
 from models.classical.weights_learned import (
     VALIDATION_SET,
     _GRID_SEARCH_PATHWAY_WEIGHTS,
+    _LOF_PRODUCTION_MUTATION_WEIGHT,
+    _LOF_PRODUCTION_PATHWAY_WEIGHT,
     _build_name_to_cvcl,
     _precompute_scores,
     _run_optimisation,
@@ -47,17 +49,20 @@ def _reciprocal_rank_for_gene(
     df = scores_cache[gene].copy()
 
     df["test_score"] = (
-        weights["rna"]     * df["rna_score"]
-        + weights["protein"] * df["protein_score"]
-        + weights["quality"] * df["quality_score"]
-        + weights["context"] * df["context_score"]
+        weights.get("rna", 0.0)     * df["rna_score"]
+        + weights.get("protein", 0.0) * df["protein_score"]
+        + weights.get("quality", 0.0) * df["quality_score"]
+        + weights.get("context", 0.0) * df["context_score"]
         + weights.get("pathway", 0.0) * df.get("pathway_activity_score", 0.0)
+        + weights.get("mutation", 0.0) * df.get("mutation_impact_score", 0.0)
         + df["geo_confirmation"]
     ).clip(0.0, 1.0)
 
-    # cellosaurus_id is the DataFrame's index (see _precompute_scores'
-    # .set_index), not a column — reset_index puts it back as one.
-    df = df.sort_values("test_score", ascending=False).reset_index()
+    # Multi-key tie-break (scorer.rank_sort): test_score is clipped to 1.0,
+    # so mutated-LOF / strong-expression lines saturate — the raw
+    # mutation_impact_score / rna_score / quality_score break those ties
+    # before cellosaurus_id does. Also puts cellosaurus_id back as a column.
+    df = rank_sort(df, "test_score")
 
     known = {
         name_to_cvcl[n.lower()] for n in VALIDATION_SET[gene] if n.lower() in name_to_cvcl
@@ -108,9 +113,10 @@ def leave_one_out_evaluation():
     cv_mrr_b = float(np.mean(list(per_gene_b.values())))
     print(f"\n  LOO-CV MRR (with pathway): {cv_mrr_b:.4f}")
 
-    # ── Config C: per-class 4D baseline + grid-search-verified pathway ───
+    # ── Config C: per-class 4D baseline + grid pathway (ts/ub) OR
+    #    mutation@0.80 (LOF) — matches production ranker.rank() ────────────
     print("\n" + "=" * 60)
-    print("CONFIG C: Per-class weights + grid pathway (LOO-CV)")
+    print("CONFIG C: Per-class weights + grid pathway / mutation (LOO-CV)")
     print("=" * 60)
     per_gene_c: dict[str, float] = {}
     for hold_out in all_genes:
@@ -127,27 +133,36 @@ def leave_one_out_evaluation():
         else:
             baseline_4d = {"rna": 0.4, "protein": 0.2, "quality": 0.3, "context": 0.1}
 
-        pw = _GRID_SEARCH_PATHWAY_WEIGHTS.get(hold_out_class, 0.0)
-        # Same construction as weights_learned._apply_grid_search_pathway_weights:
-        # rescale the 4D baseline by (1-pw) rather than tacking pathway on
-        # top of it — that would push the sum above 1.0 (see that
-        # function's docstring for the concrete overshoot example).
-        weights = {k: v * (1 - pw) for k, v in baseline_4d.items()}
-        weights["pathway"] = pw
+        # Same rescale construction as weights_learned's
+        # _apply_grid_search_pathway_weights / _apply_lof_mutation_weight:
+        # shrink the 4D baseline rather than tacking the extra term on top
+        # (which would push the sum past 1.0).
+        if hold_out_class == "loss_of_function":
+            mw, pw = _LOF_PRODUCTION_MUTATION_WEIGHT, _LOF_PRODUCTION_PATHWAY_WEIGHT
+            weights = {k: v * (1 - mw - pw) for k, v in baseline_4d.items()}
+            weights["mutation"] = mw
+            if pw > 0:
+                weights["pathway"] = pw
+            extra_desc = f"mut={mw:.2f}/path={pw:.2f}"
+        else:
+            pw = _GRID_SEARCH_PATHWAY_WEIGHTS.get(hold_out_class, 0.0)
+            weights = {k: v * (1 - pw) for k, v in baseline_4d.items()}
+            weights["pathway"] = pw
+            extra_desc = f"path={pw:.2f}"
 
         rr = _reciprocal_rank_for_gene(hold_out, weights, scores_cache, name_to_cvcl)
         per_gene_c[hold_out] = rr
-        print(f"  {hold_out:10s}  class={hold_out_class:18s}  pw={pw:.2f}  held-out RR={rr:.3f}")
+        print(f"  {hold_out:10s}  class={hold_out_class:18s}  {extra_desc:16s}  held-out RR={rr:.3f}")
     cv_mrr_c = float(np.mean(list(per_gene_c.values())))
-    print(f"\n  LOO-CV MRR (per-class + grid pathway): {cv_mrr_c:.4f}")
+    print(f"\n  LOO-CV MRR (per-class + grid pathway / mutation): {cv_mrr_c:.4f}")
 
     # ── Summary ────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("CROSS-VALIDATED EVALUATION SUMMARY")
     print("=" * 60)
-    print(f"  Config A (global, no pathway):         {cv_mrr_a:.4f}")
-    print(f"  Config B (global, with pathway):       {cv_mrr_b:.4f}")
-    print(f"  Config C (per-class, grid pathway):    {cv_mrr_c:.4f}")
+    print(f"  Config A (global, no pathway/mutation):        {cv_mrr_a:.4f}")
+    print(f"  Config B (global, with pathway):               {cv_mrr_b:.4f}")
+    print(f"  Config C (per-class: pathway ts/ub, mut@0.80+path@{_LOF_PRODUCTION_PATHWAY_WEIGHT:.2f} LOF): {cv_mrr_c:.4f}")
     print()
     print("  For reference only — NOT the same quantity: the earlier")
     print("  IN-SAMPLE (not cross-validated) Config 2 result from")
@@ -158,7 +173,14 @@ def leave_one_out_evaluation():
 
     diff = cv_mrr_c - cv_mrr_a
     verb = "IMPROVES" if diff > 0 else ("DEGRADES" if diff < 0 else "leaves unchanged")
-    print(f"  Per-class pathway scoring {verb} cross-validated MRR by {diff:+.4f}")
+    print(f"  Per-class pathway+mutation scoring {verb} cross-validated MRR by {diff:+.4f}")
+
+    # Per-class breakdown — the LOF class is where mutation scoring should move
+    lof = [g for g in all_genes if gene_classes[g] == "loss_of_function"]
+    if lof:
+        lof_a = float(np.mean([per_gene_a[g] for g in lof]))
+        lof_c = float(np.mean([per_gene_c[g] for g in lof]))
+        print(f"  LOF-only ({len(lof)} genes): Config A {lof_a:.4f} -> Config C {lof_c:.4f}  ({lof_c - lof_a:+.4f})")
 
     results = {
         "cv_mrr":     {"A": cv_mrr_a, "B": cv_mrr_b, "C": cv_mrr_c},

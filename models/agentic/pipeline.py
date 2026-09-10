@@ -72,7 +72,15 @@ def _parse_justification(text: str) -> dict:
 
 def _verification_notes(evidence: dict) -> list[str]:
     """Derive data-quality caveats from evidence dict."""
+    from models.classical.scorer import classify_gene
+
     notes = []
+    if classify_gene(evidence.get("gene", "")) == "loss_of_function" and not evidence.get("mutation"):
+        notes.append(
+            f"{evidence.get('gene')} is a loss-of-function target but no damaging "
+            f"variant was called in this line — it is likely wild-type and serves "
+            f"as a control, not a disease model"
+        )
     if not evidence.get("hpa_expression") and not evidence.get("depmap_expression"):
         notes.append("No primary RNA expression data available")
     if evidence.get("scores", {}).get("geo_confirmation", 0) < 0:

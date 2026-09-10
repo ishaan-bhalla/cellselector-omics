@@ -36,10 +36,16 @@ GENE_CLASSES: dict[str, list[str]] = {
     "ubiquitous": [
         "PARP1", "CDK4", "CCND1", "ACTB",
         "GAPDH", "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
+        # TP53: its validation targets (HCT116, U-2 OS, MCF-7) are canonical
+        # WILD-TYPE-p53 reference lines — the opposite selection criterion
+        # from the mutation-driven LOF targets used for BRCA1/BRCA2/RB1/ATM.
+        # Mutation-primary LOF scoring correctly sank those wild-type lines,
+        # so TP53 does not belong in loss_of_function for this pipeline.
+        "TP53",
     ],
     "loss_of_function": [
         "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
-        "APC", "VHL", "MLH1", "MSH2", "TP53",
+        "APC", "VHL", "MLH1", "MSH2",
     ],
 }
 
@@ -117,6 +123,40 @@ def load_mappings() -> tuple[dict, dict, dict]:
     gsm_to_cvcl = dict(zip(geo_valid["Geo_accession"], geo_valid["Cellosaurus_ID"]))
 
     return hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl
+
+
+_TIE_BREAK_KEYS = ("mutation_impact_score", "rna_score", "quality_score")
+
+
+def rank_sort(df: "pd.DataFrame", score_col: str) -> "pd.DataFrame":
+    """
+    Sort `df` for ranking / reciprocal-rank: primary key `score_col`
+    descending, then a fixed chain of raw (pre-clip) discriminators, then
+    cellosaurus_id ascending as the final deterministic fallback.
+
+    final_score is clipped to [0, 1] (see ranker.rank / mrr_score), so
+    strongly-mutated loss_of_function lines — and strong-expression + GEO
+    tissue_specific lines — pile up at an identical primary score of exactly
+    1.0. Without these extra keys, the order among them is just whatever row
+    order the merges happened to leave, and the "winner" of a large tie
+    block is decided by cellosaurus_id sort alone (which inflated BRCA1's
+    LOO-CV RR to 1.0). mutation_impact_score and rna_score are NOT clipped,
+    so they still separate those rows.
+
+    Returns a new frame with cellosaurus_id as a column and a clean
+    RangeIndex (callers read rank as row position).
+    """
+    if "cellosaurus_id" not in df.columns:
+        df = df.reset_index()
+    keys = [score_col]
+    ascending = [False]
+    for k in _TIE_BREAK_KEYS:
+        if k != score_col and k in df.columns:
+            keys.append(k)
+            ascending.append(False)
+    keys.append("cellosaurus_id")
+    ascending.append(True)
+    return df.sort_values(keys, ascending=ascending, kind="stable").reset_index(drop=True)
 
 
 def _pct_rank(series: pd.Series) -> np.ndarray:

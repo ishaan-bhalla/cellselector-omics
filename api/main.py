@@ -66,8 +66,14 @@ async def _get_learned_weights_for_gene(gene: str) -> dict:
     global _learned_weights_by_class_cache
     async with _learned_weights_lock:
         if _learned_weights_by_class_cache is None:
+            from functools import partial
+
             from models.classical.weights_learned import optimise_weights_by_class
-            _learned_weights_by_class_cache = await asyncio.to_thread(optimise_weights_by_class)
+            # include_mutation=True — LOF genes rank on damaging-mutation
+            # status, not expression (see weights_learned._apply_lof_mutation_weight).
+            _learned_weights_by_class_cache = await asyncio.to_thread(
+                partial(optimise_weights_by_class, include_mutation=True)
+            )
     by_class = _learned_weights_by_class_cache
     gene_class = classify_gene(gene)
     return by_class.get(gene_class) or by_class["tissue_specific"]
@@ -248,6 +254,8 @@ def _build_classical_result(
         "pathway_activity_score":  round(_safe_float(row.get("pathway_activity_score")), 4),
         "pathway_genes_expressed": int(row.get("pathway_genes_expressed") or 0),
         "pathway_genes_total":     int(row.get("pathway_genes_total") or 0),
+        "mutation_impact_score":   round(_safe_float(row.get("mutation_impact_score")), 4),
+        "mutation_detail":         str(row.get("mutation_detail") or ""),
         "n_sources":          int(row.get("n_sources") or 0),
         "hpa_evidence":       row.get("hpa_evidence"),
         "depmap_evidence":    row.get("depmap_evidence"),
@@ -293,9 +301,13 @@ async def recommend_classical(body: ClassicalRequest):
 
     t0 = time.time()
 
-    weights = FIXED_WEIGHTS
-    if body.use_learned_weights:
+    # LOF genes always use the mutation-aware learned weights inside rank()
+    # regardless of use_learned_weights — fetch them here too so weights_used
+    # in the response reflects what actually ran.
+    if body.use_learned_weights or classify_gene(body.gene) == "loss_of_function":
         weights = await _get_learned_weights_for_gene(body.gene)
+    else:
+        weights = FIXED_WEIGHTS
 
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(

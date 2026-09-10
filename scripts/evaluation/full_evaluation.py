@@ -8,6 +8,7 @@ from models.classical.scorer import FIXED_WEIGHTS, classify_gene
 from models.classical.weights_learned import (
     VALIDATION_SET,
     _apply_grid_search_pathway_weights,
+    _apply_lof_mutation_weight,
     _build_name_to_cvcl,
     _precompute_scores,
     _run_optimisation,
@@ -123,6 +124,13 @@ def run_full_evaluation() -> None:
     # Config 4's pathway weight per class is grid-search-verified, not
     # SLSQP's — see weights_learned._apply_grid_search_pathway_weights.
     w_by_class = _apply_grid_search_pathway_weights(w_by_class, classified_genes, precomputed)
+    # LOF class: replace the pathway vector with the mutation-primary
+    # production vector (mutation=0.80) — this is what ranker.rank() uses.
+    if classified_genes.get("loss_of_function"):
+        w_by_class["loss_of_function"] = _apply_lof_mutation_weight(
+            classified_genes["loss_of_function"], precomputed
+        )
+        print(f"\nLOF class production weights (mutation): {w_by_class['loss_of_function']}")
 
     configs = [
         ("1. Fixed weights, no pathway",
@@ -131,7 +139,7 @@ def run_full_evaluation() -> None:
          (lambda g: w_global_4d), False),
         ("3. Learned weights (global), WITH pathway",
          (lambda g: w_global_5d), True),
-        ("4. Learned weights (per-gene-class), WITH pathway",
+        ("4. Learned per-class: pathway (ts/ub) + mutation@0.80 (LOF)",
          (lambda g: _weights_for_gene(g, w_by_class)), True),
     ]
 
@@ -178,7 +186,7 @@ def run_full_evaluation() -> None:
     # ── Config 4 vs Config 2 comparison (the specific claim this feature
     # makes: per-class pathway weighting beats the pathway-free baseline) ────
     before = results["2. Learned weights (global), no pathway"]["per_gene"]
-    after = results["4. Learned weights (per-gene-class), WITH pathway"]["per_gene"]
+    after = results["4. Learned per-class: pathway (ts/ub) + mutation@0.80 (LOF)"]["per_gene"]
 
     print("Per-Gene Comparison (Config 4 vs Config 2):")
     print(f"  {'Gene':12s} {'Class':18s} {'Before':8s} {'After':8s} {'Change':8s}")

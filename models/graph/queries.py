@@ -133,6 +133,37 @@ def query_best_cell_lines_via_pathway(
     return grouped[:top_k]
 
 
+def get_mutations_for_gene(gene: str, min_impact: float = 0.0) -> list[dict]:
+    """
+    All HAS_MUTATION edges from `gene` (see ingest.ingest_mutation_edges),
+    highest impact first. Used as a graph-backed path for the mutation
+    scorer and for agentic rationale generation.
+
+    Returns [{cellosaurus_id, official_name, protein_change, hotspot,
+              likely_lof, clinical_significance, impact_score}, ...].
+    """
+    query = """
+    MATCH (g:Gene {symbol: $gene})-[m:HAS_MUTATION]->(c:CellLine)
+    WHERE m.impact_score >= $min_impact
+    RETURN c.cellosaurus_id       AS cellosaurus_id,
+           m.protein_change        AS protein_change,
+           m.hotspot               AS hotspot,
+           m.likely_lof            AS likely_lof,
+           m.clinical_significance AS clinical_significance,
+           m.impact_score          AS impact_score
+    ORDER BY m.impact_score DESC
+    """
+    try:
+        results = run_query(query, {"gene": gene, "min_impact": min_impact})
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (get_mutations_for_gene): {exc}")
+        return []
+    names = _cell_line_names()
+    for r in results:
+        r["official_name"] = names.get(r["cellosaurus_id"], r["cellosaurus_id"])
+    return results
+
+
 def graph_to_json(gene: str) -> dict:
     """
     Return the full subgraph around a gene as nodes+edges JSON for frontend

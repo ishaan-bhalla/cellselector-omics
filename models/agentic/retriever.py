@@ -147,6 +147,21 @@ def retrieve_evidence(
         else None
     )
 
+    # ── 5b. Mutation status (PRIMARY signal for loss-of-function genes) ─────
+    # rank() merges score_mutation_impact() onto every result row, so
+    # mutation_impact_score / mutation_detail are read straight off the row
+    # (same reuse pattern as CRISPR dependency above — no re-query).
+    mut_score  = top_result_df_row.get("mutation_impact_score")
+    mut_detail = top_result_df_row.get("mutation_detail")
+    mutation_evidence: dict | None = (
+        {
+            "impact_score": round(float(mut_score), 4),
+            "detail":       str(mut_detail),
+        }
+        if pd.notna(mut_score) and float(mut_score or 0) > 0 and mut_detail
+        else None
+    )
+
     # ── 6. Cell line metadata ────────────────────────────────────────────────
     master_cols = [
         "cellosaurus_id", "official_name", "evidence_count",
@@ -176,14 +191,15 @@ def retrieve_evidence(
         return round(float(top_result_df_row.get(key) or 0), 4)
 
     scores = {
-        "rna_score":        _f("rna_score"),
-        "hpa_score":        _f("hpa_score"),
-        "depmap_score":     _f("depmap_score"),
-        "protein_score":    _f("protein_score"),
-        "quality_score":    _f("quality_score"),
-        "context_score":    _f("context_score"),
-        "geo_confirmation": _f("geo_confirmation"),
-        "final_score":      _f("final_score"),
+        "rna_score":             _f("rna_score"),
+        "hpa_score":             _f("hpa_score"),
+        "depmap_score":          _f("depmap_score"),
+        "protein_score":         _f("protein_score"),
+        "quality_score":         _f("quality_score"),
+        "context_score":         _f("context_score"),
+        "mutation_impact_score": _f("mutation_impact_score"),
+        "geo_confirmation":      _f("geo_confirmation"),
+        "final_score":           _f("final_score"),
     }
 
     # ── 8. PubMed literature ─────────────────────────────────────────────────
@@ -213,6 +229,7 @@ def retrieve_evidence(
         "geo_expression":        geo_evidence,
         "proteomics":            prot_evidence,
         "crispr_dependency":     crispr_evidence,
+        "mutation":              mutation_evidence,
         # Precise {label, score, percentile} dicts computed once in rank()
         # (see ranker.add_rank_comparisons's neighbors) and read straight
         # off top_result_df_row — same reuse pattern as crispr_dependency
@@ -296,6 +313,27 @@ def format_context(gene: str, evidence: dict) -> str:
         f"despite being transcribed."
     )
 
+    mutation = evidence.get("mutation")
+    if mutation:
+        mutation_section = (
+            "MUTATION STATUS (DepMap somatic variant calls):\n"
+            f"- {mutation['detail']}\n"
+            f"- Mutation impact score: {mutation['impact_score']:.2f}  "
+            f"(0-1; combines hotspot / predicted loss-of-function / clinical "
+            f"significance / AlphaMissense+REVEL evidence, worst variant wins)\n"
+            f"- For a loss-of-function target this is the PRIMARY reason a line "
+            f"is a relevant model — a damaging {gene} mutation, not expression "
+            f"level, is what scientists select on. Cite the specific protein "
+            f"change above in your justification."
+        )
+    else:
+        mutation_section = (
+            "MUTATION STATUS (DepMap somatic variant calls):\n"
+            f"- No damaging {gene} variant called in this cell line — it is "
+            f"most likely {gene} wild-type. For a loss-of-function target that "
+            f"makes this line a CONTROL, not a disease model."
+        )
+
     geo_conf = scores["geo_confirmation"]
     geo_conf_str = (
         "GEO CONFIRMS (+0.10 bonus)"  if geo_conf > 0 else
@@ -348,6 +386,8 @@ EXPRESSION EVIDENCE:
 
 {crispr_section}
 
+{mutation_section}
+
 CELL LINE PROFILE:
 - Disease:              {meta.get('disease', 'unknown')}
 - Lineage:              {meta.get('lineage', 'unknown')}
@@ -362,6 +402,7 @@ SCORES:
 - Protein score:        {scores['protein_score']:.2f}
 - Data quality score:   {scores['quality_score']:.2f}
 - Context score:        {scores['context_score']:.2f}
+- Mutation impact score: {scores.get('mutation_impact_score', 0.0):.2f}
 - GEO confirmation:     {scores['geo_confirmation']:+.2f}
 - Final fit score:      {scores['final_score']:.2f}
 

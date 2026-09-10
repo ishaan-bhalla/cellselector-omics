@@ -8,10 +8,12 @@ from scipy.optimize import minimize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
+from models.classical.mutation_scorer import score_mutation_impact
 from models.classical.pathway_scorer import score_pathway_activity
 from models.classical.scorer import (
     classify_gene,
     load_mappings,
+    rank_sort,
     score_context,
     score_data_quality,
     score_protein_expression,
@@ -150,6 +152,29 @@ def _precompute_scores(
             result["pathway_activity_score"] = 0.0
         result["pathway_activity_score"] = result["pathway_activity_score"].fillna(0.0)
 
+        # Mutation impact — a flat per-cell-line lookup (no Neo4j), the
+        # PRIMARY signal for loss_of_function genes. Precomputed here for the
+        # same reason as everything else: the optimiser inner loop stays pure
+        # arithmetic on cached columns.
+        mut_df = score_mutation_impact(gene)
+        if len(mut_df) > 0:
+            result = result.merge(
+                mut_df[["cellosaurus_id", "mutation_impact_score"]],
+                on="cellosaurus_id", how="left",
+            )
+        else:
+            result["mutation_impact_score"] = 0.0
+        result["mutation_impact_score"] = result["mutation_impact_score"].fillna(0.0)
+
+        # Deterministic row order BEFORE any downstream ranking. Every merge
+        # above (rna/protein/quality/context/pathway/mutation) can leave rows
+        # in a different order depending on which cell lines each source
+        # covers, and the reciprocal-rank computations later do a STABLE sort
+        # by score — so tied scores break by whatever row order landed here.
+        # Sorting by cellosaurus_id makes tie-breaking identical regardless
+        # of which columns were merged, in what order, so MRR is reproducible.
+        result = result.sort_values("cellosaurus_id", kind="stable").reset_index(drop=True)
+
         scores[gene] = result.set_index("cellosaurus_id")
 
     return scores
@@ -179,15 +204,23 @@ def mrr_score(
             + weights["quality"] * df["quality_score"]
             + weights["context"] * df["context_score"]
             + weights.get("pathway", 0.0) * df.get("pathway_activity_score", 0.0)
+            + weights.get("mutation", 0.0) * df.get("mutation_impact_score", 0.0)
             + df["geo_confirmation"]   # fixed additive, not optimised
         )
-        df = df.sort_values("final_score", ascending=False).reset_index()
+        # Multi-key tie-break (scorer.rank_sort): final_score is clipped to
+        # 1.0, so mutated-LOF / strong-expression lines saturate — the raw
+        # mutation_impact_score / rna_score / quality_score break those ties
+        # before cellosaurus_id does.
+        df = rank_sort(df, "final_score")
 
-        known_cvcls = {
+        # sorted(): iterating a set is hash-seed-dependent, which changes the
+        # append order into all_rr and hence np.mean's summation order —
+        # enough for a 1-ULP wobble between processes. sorted() pins it.
+        known_cvcls = sorted({
             name_to_cvcl.get(n.lower())
             for n in known_names
             if name_to_cvcl.get(n.lower())
-        }
+        })
         for cvcl in known_cvcls:
             hits = df.index[df["cellosaurus_id"] == cvcl].tolist()
             all_rr.append(1.0 / (hits[0] + 1) if hits else 0.0)
@@ -353,9 +386,159 @@ def _apply_grid_search_pathway_weights(
     return out
 
 
+# Loss-of-function genes rank on damaging-mutation status, not expression.
+# Their weight vector is {mutation, rna, protein, quality, context} — pathway
+# is dropped for this class (it was only ever a weak proxy for "this line has
+# a hit copy of the gene", which mutation_impact_score measures directly).
+_LOF_MUTATION_W_KEYS = ["mutation", "rna", "protein", "quality", "context"]
+_LOF_MUTATION_STARTING_POINTS = [
+    [0.60, 0.10, 0.05, 0.15, 0.10],   # mutation-heavy seed
+    [0.40, 0.20, 0.10, 0.20, 0.10],   # conservative seed
+]
+_LOF_MUTATION_BOUNDS = [(0.20, 1.00)] + [(0.0, 0.60)] * 4
+
+# Production mutation weight for loss_of_function genes. Chosen after the
+# extended [0.20, 1.00] grid search (see optimise_lof_mutation_weights):
+# in-sample LOF MRR rises in a step at mutation≈0.74, plateaus at ~0.124
+# through 0.92, peaks at 0.1263 across 0.94-0.98, then COLLAPSES to 0.0464
+# at exactly 1.00 — with zero expression weight, the many cell lines tied
+# at mutation_impact_score=1.0 (827 for TP53 alone) sort arbitrarily and
+# the real model is buried. 0.80 sits on the main plateau (MRR 0.1238,
+# within N=5 noise of the peak) while keeping 20% expression weight as a
+# genuine sanity signal rather than a bare tie-breaker.
+_LOF_PRODUCTION_MUTATION_WEIGHT = 0.80
+
+# Pathway weight in the LOF vector: 0.00 (CLOSED). The pathway grid search
+# showed a large in-sample step-jump in LOF MRR at pathway≈0.15 on top of
+# mutation@0.80 (0.12 -> 0.35), but a one-off LOO-CV test of mutation=0.80 /
+# pathway=0.15 moved the LOF-class cross-validated MRR by only +0.0011
+# (0.1330 -> 0.1341) — noise. The in-sample effect was overfitting to the
+# tiny LOF validation set (known models happen to be pathway-active in
+# Neo4j). Do not re-test regardless of future in-sample checks.
+_LOF_PRODUCTION_PATHWAY_WEIGHT = 0.0
+
+
+def optimise_lof_mutation_weights(
+    lof_genes: dict,
+    precomputed: dict,
+    grid_step: float = 0.02,
+    grid_max: float = 1.00,
+) -> dict:
+    """
+    Optimise {mutation, rna, protein, quality, context} for loss-of-function
+    genes, then verify the mutation weight with a 1-D grid search.
+
+    1. SLSQP from the two fixed seeds above, mutation ∈ [0.20, 0.80], the
+       other four ∈ [0.0, 0.60], simplex sum == 1.0.
+    2. 1-D grid search on the mutation weight alone (0.20-0.80, step
+       `grid_step`): refit the 4-D no-mutation baseline on the LOF genes,
+       rescale it by (1 - m), set mutation = m, sweep m. This is the SAME
+       construction _apply_grid_search_pathway_weights uses, so the swept
+       weights are exactly what would be applied — a guard against SLSQP
+       stalling on a seed on the step-function MRR surface (which happened
+       for the pathway dimension).
+
+    Returns a dict with the SLSQP result, the full grid, the grid-verified
+    optimum, and `final` (= grid-verified weights, the ones to apply).
+    """
+    keys = _LOF_MUTATION_W_KEYS
+
+    def objective(w_arr: np.ndarray) -> float:
+        return -mrr_score(dict(zip(keys, w_arr)), lof_genes, precomputed)
+
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
+    best_res = None
+    print("\n=== LOF mutation weights: SLSQP ===")
+    for seed in _LOF_MUTATION_STARTING_POINTS:
+        x0 = (np.array(seed) / sum(seed)).tolist()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = minimize(
+                objective, x0, method="SLSQP",
+                bounds=_LOF_MUTATION_BOUNDS, constraints=constraints,
+                options={"ftol": 1e-9, "maxiter": 500},
+            )
+        print(f"  seed {seed} -> MRR={-res.fun:.4f}  "
+              f"{ {k: round(float(v), 4) for k, v in zip(keys, res.x)} }")
+        if best_res is None or res.fun < best_res.fun:
+            best_res = res
+    slsqp_weights = {k: float(v) for k, v in zip(keys, best_res.x)}
+    slsqp_mrr = float(-best_res.fun)
+
+    print("\n=== LOF mutation weights: 1-D grid search on `mutation` ===")
+    baseline_4d = _run_optimisation(
+        lof_genes, precomputed,
+        label="LOF 4D baseline (no mutation) for grid override",
+        include_pathway=False,
+    )
+    grid: list[tuple[float, float]] = []
+    m = 0.20
+    while m <= grid_max + 1e-9:
+        w = {**{k: v * (1 - m) for k, v in baseline_4d.items()}, "mutation": round(m, 4)}
+        mrr = mrr_score(w, lof_genes, precomputed)
+        grid.append((round(m, 4), mrr))
+        print(f"  mutation={m:.2f}  MRR={mrr:.4f}")
+        m += grid_step
+    grid_best_m, grid_best_mrr = max(grid, key=lambda t: t[1])
+
+    # `final` uses the PRODUCTION weight (_LOF_PRODUCTION_MUTATION_WEIGHT),
+    # not grid_best_m — the grid peak (0.94-0.98) is within N=5 noise of
+    # 0.80 and the extra ~15% expression weight at 0.80 is a deliberate
+    # domain choice (keep a real sanity check, stay clear of the m=1.0
+    # cliff). Same rescale-by-(1-m) construction the grid verified.
+    pw = _LOF_PRODUCTION_MUTATION_WEIGHT
+    final = {**{k: round(float(v) * (1 - pw), 4) for k, v in baseline_4d.items()},
+             "mutation": round(float(pw), 4)}
+
+    print(f"\n  SLSQP best          : MRR={slsqp_mrr:.4f}  {slsqp_weights}")
+    print(f"  grid-search best    : mutation={grid_best_m:.2f}  MRR={grid_best_mrr:.4f}")
+    print(f"  PRODUCTION (mutation={pw:.2f}): {final}")
+
+    return {
+        "slsqp": slsqp_weights,
+        "slsqp_mrr": slsqp_mrr,
+        "grid": grid,
+        "grid_best_m": grid_best_m,
+        "grid_best_mrr": grid_best_mrr,
+        "baseline_4d": baseline_4d,
+        "final": final,
+    }
+
+
+def _apply_lof_mutation_weight(
+    lof_genes: dict,
+    precomputed: dict,
+    mutation_weight: float = _LOF_PRODUCTION_MUTATION_WEIGHT,
+    pathway_weight: float = _LOF_PRODUCTION_PATHWAY_WEIGHT,
+) -> dict:
+    """
+    Build the loss_of_function production weight vector {mutation, pathway,
+    rna, protein, quality, context}.
+
+    Refit the 4-D expression baseline on the LOF genes, rescale it by
+    (1 - mutation_weight - pathway_weight), then set mutation and pathway.
+    Identical rescale construction to _apply_grid_search_pathway_weights,
+    so what's applied is what the grid verified. The pathway key is dropped
+    when pathway_weight == 0.
+    """
+    baseline_4d = _run_optimisation(
+        lof_genes, precomputed,
+        label="LOF 4D baseline (mutation override)", include_pathway=False,
+    )
+    scale = 1.0 - mutation_weight - pathway_weight
+    out = {
+        **{k: round(float(v) * scale, 4) for k, v in baseline_4d.items()},
+        "mutation": round(float(mutation_weight), 4),
+    }
+    if pathway_weight > 0:
+        out["pathway"] = round(float(pathway_weight), 4)
+    return out
+
+
 def optimise_weights_by_class(
     validation_set: dict = VALIDATION_SET,
     include_pathway: bool = True,
+    include_mutation: bool = False,
 ) -> dict[str, dict | None]:
     """
     Optimise weights SEPARATELY for each gene class.
@@ -364,11 +547,18 @@ def optimise_weights_by_class(
     SLSQP-fitted value — it's overridden by the grid-search-verified
     optimum; see _apply_grid_search_pathway_weights.
 
+    When include_mutation=True, the loss_of_function class is replaced with
+    a mutation-primary vector {mutation, rna, protein, quality, context}
+    (no pathway key) at the production mutation weight — see
+    _apply_lof_mutation_weight. tissue_specific / ubiquitous are unaffected.
+
     Returns:
         {
-            "tissue_specific": {rna, protein, quality, context, pathway},
-            "ubiquitous":      {rna, protein, quality, context, pathway},
-            "loss_of_function": None,  # too few validation genes; use tissue_specific weights
+            "tissue_specific":  {rna, protein, quality, context, pathway},
+            "ubiquitous":       {rna, protein, quality, context, pathway},
+            "loss_of_function": {rna, protein, quality, context, pathway}
+                                 — or {mutation, rna, protein, quality,
+                                 context} when include_mutation=True,
         }
         (pathway key omitted from each dict when include_pathway=False)
     """
@@ -407,5 +597,17 @@ def optimise_weights_by_class(
             "tissue_specific": ts_genes, "ubiquitous": ub_genes, "loss_of_function": lof_genes,
         }
         class_weights = _apply_grid_search_pathway_weights(class_weights, classified_genes, precomputed)
+
+    if include_mutation and lof_genes:
+        # LOF genes get a mutation-primary vector {mutation, rna, protein,
+        # quality, context} — no pathway key — replacing whatever the
+        # pathway path produced above for this class. Uses the production
+        # weight (mutation=0.80); run optimise_lof_mutation_weights directly
+        # to re-derive/verify it via the full SLSQP + grid sweep.
+        print("\n=== Applying loss_of_function MUTATION weights (production) ===")
+        class_weights["loss_of_function"] = _apply_lof_mutation_weight(
+            lof_genes, precomputed
+        )
+        print(f"  loss_of_function -> {class_weights['loss_of_function']}")
 
     return class_weights
