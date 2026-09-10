@@ -207,6 +207,85 @@ def ingest_mutation_edges(batch_size: int = 500) -> dict:
     }
 
 
+def enrich_cell_line_lineage(batch_size: int = 500) -> dict:
+    """
+    Set disease / lineage / tissue_type on CellLine nodes ALREADY in the
+    graph, from cell_line_lookup.parquet — the nomenclature spine where
+    these live (master_merged.parquet has no disease/lineage columns; this
+    is the same source _ingest_expression_edges already reads). MATCH, not
+    MERGE: enriches existing nodes only, never adds one.
+
+    In this schema `lineage` IS the tissue of origin (blood, colorectal,
+    central_nervous_system, ...); there is no separate tissue_type column,
+    so tissue_type mirrors lineage. Empty strings are written as null
+    (SET c.prop = null removes the property in Cypher).
+    """
+    existing = {r["id"] for r in run_query(
+        "MATCH (c:CellLine) RETURN c.cellosaurus_id AS id")}
+    lkp = pd.read_parquet(
+        CELL_LINE_LOOKUP, columns=["cellosaurus_id", "disease", "lineage"]
+    )
+
+    def _clean(v) -> str | None:
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
+    rows = [
+        {"cvcl": r["cellosaurus_id"],
+         "disease": _clean(r["disease"]),
+         "lineage": _clean(r["lineage"])}
+        for _, r in lkp.iterrows()
+        if r["cellosaurus_id"] in existing
+    ]
+    with_disease = sum(1 for r in rows if r["disease"])
+    for i in range(0, len(rows), batch_size):
+        run_query(
+            """
+            UNWIND $rows AS row
+            MATCH (c:CellLine {cellosaurus_id: row.cvcl})
+            SET c.disease = row.disease,
+                c.lineage = row.lineage,
+                c.tissue_type = row.lineage
+            """,
+            {"rows": rows[i:i + batch_size]},
+        )
+    return {"cell_lines_matched": len(rows), "with_disease": with_disease,
+            "graph_cell_lines": len(existing)}
+
+
+def enrich_gene_roles() -> dict:
+    """
+    Set `role` on Gene nodes ALREADY in the graph, from GENE_ROLES
+    (models/classical/scorer.py) — receptor tyrosine kinase / tumor
+    suppressor / oncogene / hormone receptor / immune checkpoint marker /
+    proliferation marker. MATCH, not MERGE: existing Gene nodes only.
+    """
+    from models.classical.scorer import GENE_ROLES
+
+    existing = {r["s"] for r in run_query("MATCH (g:Gene) RETURN g.symbol AS s")}
+    rows = [{"gene": g, "role": role}
+            for g, role in GENE_ROLES.items() if g in existing]
+    skipped = [g for g in GENE_ROLES if g not in existing]
+    run_query(
+        """
+        UNWIND $rows AS row
+        MATCH (g:Gene {symbol: row.gene})
+        SET g.role = row.role
+        """,
+        {"rows": rows},
+    )
+    return {"genes_enriched": len(rows),
+            "skipped_not_in_graph": sorted(skipped)}
+
+
+def enrich_all() -> dict:
+    """Steps 1-2: enrich existing CellLine + Gene nodes with lineage / role."""
+    cl = enrich_cell_line_lineage()
+    print(f"  CellLine lineage: {cl}")
+    gr = enrich_gene_roles()
+    print(f"  Gene roles: {gr}")
+    return {"cell_line": cl, "gene": gr}
+
+
 def ingest_all() -> None:
     genes = sorted(VALIDATION_SET.keys())
     print(f"Ingesting {len(genes)} genes into Neo4j...")
@@ -222,10 +301,15 @@ def ingest_all() -> None:
 
     print(f"Ingestion complete in {time.time() - t0:.0f}s. Unique genes scored: {len(scored_genes)}")
 
+    print("\nEnriching nodes with lineage / role properties...")
+    enrich_all()
+
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "mutations":
-        stats = ingest_mutation_edges()
-        print(f"\nHAS_MUTATION ingestion complete: {stats}")
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "mutations":
+        print(f"\nHAS_MUTATION ingestion complete: {ingest_mutation_edges()}")
+    elif cmd == "enrich":
+        print(f"\nEnrichment complete: {enrich_all()}")
     else:
         ingest_all()
