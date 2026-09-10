@@ -108,7 +108,7 @@ def _f(v):
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return None
         return float(v)
-    except:
+    except (ValueError, TypeError):
         return None
 
 @app.get("/health")

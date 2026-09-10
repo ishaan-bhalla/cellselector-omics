@@ -21,11 +21,11 @@ from config import (
 # 0.90. Kept these exact values rather than silently rescaling them —
 # flagging again since the arithmetic still doesn't match the stated intent.
 FIXED_WEIGHTS = {
-    "rna":     0.30,
+    "rna":     0.35,
     "protein": 0.15,
     "quality": 0.20,
     "context": 0.15,
-    "pathway": 0.10,
+    "pathway": 0.15,
 }
 
 # GEO confirmation bonus/penalty — additive, not part of weighted sum
@@ -34,9 +34,8 @@ GEO_PENALTY = -0.10
 
 GENE_CLASSES: dict[str, list[str]] = {
     "ubiquitous": [
-        "TP53", "PARP1", "CDK4", "CCND1", "ACTB",
-        "GAPDH", "RB1", "ATM", "BRCA1", "BRCA2",
-        "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
+        "PARP1", "CDK4", "CCND1", "ACTB",
+        "GAPDH", "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
     ],
     "loss_of_function": [
         "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
@@ -98,7 +97,13 @@ def classify_gene(gene: str) -> str:
 def load_mappings() -> tuple[dict, dict, dict]:
     """Return (hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl)."""
     lkp = pd.read_parquet(CELL_LINE_LOOKUP, columns=["cellosaurus_id", "hpa_name"])
-    hpa_to_cvcl = dict(zip(lkp["hpa_name"].dropna(), lkp["cellosaurus_id"].dropna()))
+    # Filter both columns from the SAME row-aligned frame before zipping —
+    # zipping two independently-.dropna()'d Series silently pairs values by
+    # position, not by original row, whenever the two columns have
+    # different NaN counts (hpa_name has many more NaNs than cellosaurus_id
+    # here, which shifted ~94% of pairs onto the wrong cell line).
+    lkp_hpa = lkp.dropna(subset=["hpa_name"])
+    hpa_to_cvcl = dict(zip(lkp_hpa["hpa_name"], lkp_hpa["cellosaurus_id"]))
 
     samp = pd.read_csv(SAMPLE_INFO, usecols=["DepMap_ID", "RRID"], low_memory=False)
     ach_to_cvcl = {r.DepMap_ID: r.RRID for r in samp.itertuples() if pd.notna(r.RRID)}
@@ -108,9 +113,8 @@ def load_mappings() -> tuple[dict, dict, dict]:
         usecols=["Geo_accession", "Cellosaurus_ID"],
         low_memory=False,
     )
-    gsm_to_cvcl = dict(
-        zip(geo["Geo_accession"].dropna(), geo["Cellosaurus_ID"].dropna())
-    )
+    geo_valid = geo.dropna(subset=["Geo_accession", "Cellosaurus_ID"])
+    gsm_to_cvcl = dict(zip(geo_valid["Geo_accession"], geo_valid["Cellosaurus_ID"]))
 
     return hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl
 

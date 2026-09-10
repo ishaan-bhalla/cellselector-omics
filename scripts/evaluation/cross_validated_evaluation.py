@@ -1,9 +1,11 @@
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import numpy as np
 
+from config import OUTPUTS_DIR
 from models.classical.scorer import classify_gene, load_mappings
 from models.classical.weights_learned import (
     VALIDATION_SET,
@@ -12,6 +14,11 @@ from models.classical.weights_learned import (
     _precompute_scores,
     _run_optimisation,
 )
+
+# Per-gene RRs for A/B/C are persisted here so other scripts (e.g.
+# compare_ranking_methods.py's significance tests) can reuse them without
+# re-running this file's ~25-fold SLSQP optimization loops per config.
+RESULTS_PATH = OUTPUTS_DIR / "cross_validated_loo_results.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Leave-one-out cross-validation. Every MRR reported so far (full_evaluation.py,
@@ -77,35 +84,35 @@ def leave_one_out_evaluation():
     print("\n" + "=" * 60)
     print("CONFIG A: Global weights, no pathway (LOO-CV)")
     print("=" * 60)
-    loo_mrrs_a = []
+    per_gene_a: dict[str, float] = {}
     for hold_out in all_genes:
         train = {g: VALIDATION_SET[g] for g in all_genes if g != hold_out}
         weights = _run_optimisation(train, scores_cache, label=f"A/-{hold_out}", include_pathway=False)
         rr = _reciprocal_rank_for_gene(hold_out, weights, scores_cache, name_to_cvcl)
-        loo_mrrs_a.append(rr)
+        per_gene_a[hold_out] = rr
         print(f"  {hold_out:10s}  held-out RR={rr:.3f}")
-    cv_mrr_a = float(np.mean(loo_mrrs_a))
+    cv_mrr_a = float(np.mean(list(per_gene_a.values())))
     print(f"\n  LOO-CV MRR (no pathway): {cv_mrr_a:.4f}")
 
     # ── Config B: global 5D, with pathway ─────────────────────────────────
     print("\n" + "=" * 60)
     print("CONFIG B: Global weights, WITH pathway (LOO-CV)")
     print("=" * 60)
-    loo_mrrs_b = []
+    per_gene_b: dict[str, float] = {}
     for hold_out in all_genes:
         train = {g: VALIDATION_SET[g] for g in all_genes if g != hold_out}
         weights = _run_optimisation(train, scores_cache, label=f"B/-{hold_out}", include_pathway=True)
         rr = _reciprocal_rank_for_gene(hold_out, weights, scores_cache, name_to_cvcl)
-        loo_mrrs_b.append(rr)
+        per_gene_b[hold_out] = rr
         print(f"  {hold_out:10s}  held-out RR={rr:.3f}")
-    cv_mrr_b = float(np.mean(loo_mrrs_b))
+    cv_mrr_b = float(np.mean(list(per_gene_b.values())))
     print(f"\n  LOO-CV MRR (with pathway): {cv_mrr_b:.4f}")
 
     # ── Config C: per-class 4D baseline + grid-search-verified pathway ───
     print("\n" + "=" * 60)
     print("CONFIG C: Per-class weights + grid pathway (LOO-CV)")
     print("=" * 60)
-    loo_mrrs_c = []
+    per_gene_c: dict[str, float] = {}
     for hold_out in all_genes:
         hold_out_class = gene_classes[hold_out]
         cls_train = {
@@ -129,9 +136,9 @@ def leave_one_out_evaluation():
         weights["pathway"] = pw
 
         rr = _reciprocal_rank_for_gene(hold_out, weights, scores_cache, name_to_cvcl)
-        loo_mrrs_c.append(rr)
+        per_gene_c[hold_out] = rr
         print(f"  {hold_out:10s}  class={hold_out_class:18s}  pw={pw:.2f}  held-out RR={rr:.3f}")
-    cv_mrr_c = float(np.mean(loo_mrrs_c))
+    cv_mrr_c = float(np.mean(list(per_gene_c.values())))
     print(f"\n  LOO-CV MRR (per-class + grid pathway): {cv_mrr_c:.4f}")
 
     # ── Summary ────────────────────────────────────────────────────────────
@@ -152,6 +159,16 @@ def leave_one_out_evaluation():
     diff = cv_mrr_c - cv_mrr_a
     verb = "IMPROVES" if diff > 0 else ("DEGRADES" if diff < 0 else "leaves unchanged")
     print(f"  Per-class pathway scoring {verb} cross-validated MRR by {diff:+.4f}")
+
+    results = {
+        "cv_mrr":     {"A": cv_mrr_a, "B": cv_mrr_b, "C": cv_mrr_c},
+        "per_gene_rr": {"A": per_gene_a, "B": per_gene_b, "C": per_gene_c},
+    }
+    with open(RESULTS_PATH, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nSaved per-gene results → {RESULTS_PATH}")
+
+    return results
 
 
 if __name__ == "__main__":
