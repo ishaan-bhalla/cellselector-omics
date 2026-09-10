@@ -352,12 +352,20 @@ def score_rna_expression(
     )
 
     def _geo_conf(row):
-        if pd.isna(row["geo_n_samples"]):
+        n = row["geo_n_samples"]
+        if pd.isna(n):
             return 0.0                               # no GEO data → neutral
+        # Scale the ±0.10 by GEO sample count: one sample is weak evidence of
+        # agreement (or disagreement), several concordant samples is strong.
+        #   n >= 3 → full   | n == 2 → 0.6x (+/-0.06) | n == 1 → 0.3x (+/-0.03)
+        # The geo_expressed consistency gate (median > 0 AND cv < 0.5) is
+        # unchanged — only the magnitude now depends on n.
+        n = int(n)
+        scale = 1.0 if n >= 3 else (0.6 if n == 2 else (0.3 if n == 1 else 0.0))
         if row["geo_expressed"]:
-            return GEO_BONUS                         # GEO confirms expression
+            return round(GEO_BONUS * scale, 3)       # GEO confirms expression
         elif row["rna_score"] > 0:
-            return GEO_PENALTY                       # GEO contradicts primary
+            return round(GEO_PENALTY * scale, 3)     # GEO contradicts primary
         return 0.0                                   # both say absent → neutral
 
     result["geo_confirmation"] = result.apply(_geo_conf, axis=1)
