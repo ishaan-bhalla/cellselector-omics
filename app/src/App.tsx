@@ -5,7 +5,6 @@ import Search from './pages/Search'
 import Browse from './pages/Browse'
 import About from './pages/About'
 import Data from './pages/Data'
-import GraphExplorer from './pages/GraphExplorer'
 
 export default function App() {
   return (
@@ -17,7 +16,6 @@ export default function App() {
         <Route path="/browse" element={<Browse />} />
         <Route path="/about"  element={<About />}  />
         <Route path="/data"   element={<Data />}   />
-        <Route path="/graph"  element={<GraphExplorer />} />
       </Routes>
     </div>
   )

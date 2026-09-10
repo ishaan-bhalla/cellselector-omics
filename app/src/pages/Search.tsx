@@ -22,6 +22,7 @@ export default function Search() {
   const [excludeGenes, setExcludeGenes] = useState('')
   const [topN, setTopN] = useState(10)
   const [allResults, setAllResults] = useState<any>(null)
+  const [pathwayResults, setPathwayResults] = useState<any[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadLine, setLoadLine] = useState(0)
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
@@ -66,19 +67,35 @@ export default function Search() {
   const handleSearch = async () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
-    setLoading(true); setAllResults(null); setError(null)
+
+    const excludeList = excludeGenes
+      ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      : []
+    if (excludeList.includes(g)) {
+      setError(`Cannot search for ${g} and exclude it at the same time.`)
+      return
+    }
+
+    setLoading(true); setAllResults(null); setPathwayResults(null); setError(null)
     try {
-      const r = await api.recommendClassical({
-        gene: g,
-        disease_filter: diseaseFilter.trim() || undefined,
-        lineage_filter: lineageFilter.trim() || undefined,
-        exclude_genes: excludeGenes
-          ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-          : undefined,
-        top_n: 50,
-      })
+      const diseaseFilterVal = diseaseFilter.trim() || undefined
+      // Pathway-connected recommendations are fetched alongside the main
+      // search, not on a separate user action. A failure here (e.g. the
+      // gene isn't yet ingested into the graph) shouldn't break the main
+      // results, so it's caught independently rather than via the outer catch.
+      const [r, pw] = await Promise.all([
+        api.recommendClassical({
+          gene: g,
+          disease_filter: diseaseFilterVal,
+          lineage_filter: lineageFilter.trim() || undefined,
+          exclude_genes: excludeList.length ? excludeList : undefined,
+          top_n: 50,
+        }),
+        api.cellLinesViaPathway(g, diseaseFilterVal, 5).catch(() => null),
+      ])
       if (r.detail) throw new Error(r.detail)
       setAllResults(r)
+      setPathwayResults(pw?.results ?? null)
     } catch (e: any) {
       setError(e?.message ?? 'Request failed. Is the API running on port 8001?')
     } finally {
@@ -132,6 +149,11 @@ export default function Search() {
   const displayedResults = allResults
     ? { ...allResults, results: (allResults.results as any[]).slice(0, topN) }
     : null
+
+  // Actual weights the API used for this query (learned or fixed) — the
+  // scoring panel reads real numbers from here rather than hardcoding them,
+  // since learned weights (the default) don't match any fixed percentage.
+  const w = allResults?.weights_used
 
   const geneFound = geneInfo?.found === true
   const sourcesFound = geneFound
@@ -245,6 +267,52 @@ export default function Search() {
         {/* Results */}
         {allResults && !loading && (
           <>
+            {/* Scoring transparency panel */}
+            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
+              <div className="font-semibold text-black mb-2">
+                How Fit Score is computed
+              </div>
+              <p>
+                Each cell line is scored across five weighted
+                dimensions: <strong>RNA Expression</strong>{' '}
+                ({w?.rna ? (w.rna * 100).toFixed(0) : '?'}%)
+                measures transcript abundance across HPA and
+                DepMap; <strong>Protein</strong>{' '}
+                ({w?.protein ? (w.protein * 100).toFixed(0) : '?'}%) measures
+                protein abundance from CCLE proteomics;{' '}
+                <strong>Data Quality</strong>{' '}
+                ({w?.quality ? (w.quality * 100).toFixed(0) : '?'}%) reflects
+                cross-source agreement and data completeness;{' '}
+                <strong>Context</strong>{' '}
+                ({w?.context ? (w.context * 100).toFixed(0) : '?'}%) rewards disease
+                and tissue match to your search filter;{' '}
+                <strong>Pathway Activity</strong>{' '}
+                ({w?.pathway ? (w.pathway * 100).toFixed(0) : '10'}%) measures
+                how many genes sharing a KEGG pathway with your
+                target are also expressed in this cell line. GEO
+                expression acts as a confirmatory bonus
+                (up to +10%). Weights are optimised by maximising
+                Mean Reciprocal Rank against 25 validated
+                gene-cell-line associations from the literature.
+              </p>
+              <p className="mt-2">
+                Fit Score combines five evidence dimensions with
+                weights that are automatically optimized per gene
+                class using Mean Reciprocal Rank against 25
+                validated gene-cell-line associations. The system
+                discovered that pathway activity improves ranking
+                accuracy for hormone receptors and broadly-expressed
+                genes, but can introduce noise for receptor tyrosine
+                kinases where direct expression is already the
+                decisive signal — so pathway weight is tuned
+                independently per gene class. The percentages above
+                reflect the weights actually applied to{' '}
+                {allResults.query?.gene ?? gene}, a{' '}
+                {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
+                gene.
+              </p>
+            </div>
+
             <div className="flex items-center justify-between mb-6">
               <div>
                 <div className="text-[#1D1D1F] font-bold text-lg">
@@ -299,6 +367,61 @@ export default function Search() {
                   onCellLineClick={setSelectedCVCL}
                 />
               ))}
+            </div>
+
+            {/* Pathway-Connected Recommendations */}
+            <div className="mt-8 pt-8 border-t border-gray-200">
+              <h2 className="text-lg font-semibold mb-1">
+                Pathway-Connected Recommendations
+              </h2>
+              <p className="text-xs text-[#6E6E73] mb-4">
+                Cell lines strong for genes that share a
+                biological pathway with {allResults.query?.gene ?? gene}. These expand
+                your experimental options beyond direct{' '}
+                {allResults.query?.gene ?? gene} expression.
+              </p>
+              {pathwayResults === null ? (
+                <div className="text-xs text-[#6E6E73]">
+                  No pathway-connected data available for this gene yet — the knowledge
+                  graph currently only covers a curated set of validation genes.
+                </div>
+              ) : pathwayResults.length === 0 ? (
+                <div className="text-xs text-[#6E6E73]">
+                  No pathway-connected cell lines found for this gene.
+                </div>
+              ) : (
+                pathwayResults.map((r: any) => {
+                  const top = r.connecting_genes?.[0]
+                  const isDirect = top?.is_target
+                  return (
+                    <div
+                      key={r.cellosaurus_id}
+                      className="border rounded-lg p-3 mb-2 cursor-pointer hover:border-[#1D1D1F] transition-colors"
+                      onClick={() => setSelectedCVCL(r.cellosaurus_id)}
+                    >
+                      <div className="flex justify-between">
+                        <div>
+                          <span className="font-medium">
+                            {r.official_name ?? r.cellosaurus_id}
+                          </span>
+                          {top && (
+                            <span
+                              className={`ml-2 text-xs px-2 py-0.5 rounded ${
+                                isDirect ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'
+                              }`}
+                            >
+                              {isDirect ? `direct: ${top.gene}` : `via ${top.gene}`}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-sm">
+                          score {(r.max_score ?? 0).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
             </div>
           </>
         )}

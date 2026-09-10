@@ -46,16 +46,10 @@ export const api = {
     return fetch(`/cell-lines${qs ? '?' + qs : ''}`).then(r => r.json())
   },
 
-  exploreGraph: (gene: string, diseaseFilter?: string) => {
-    const q = new URLSearchParams()
-    if (diseaseFilter) q.append('disease_filter', diseaseFilter)
-    const qs = q.toString()
-    return fetch(`/graph/explore/${encodeURIComponent(gene)}${qs ? '?' + qs : ''}`).then(r => r.json())
-  },
-
-  pathwayNeighbors: (gene: string) =>
-    fetch(`/graph/pathway-neighbors/${encodeURIComponent(gene)}`).then(r => r.json()),
-
+  // /graph/explore and /graph/pathway-neighbors remain valid, tested API
+  // endpoints (see api/main.py) — just no longer called from the frontend
+  // now that GraphExplorer.tsx is gone. cellLinesViaPathway is the one the
+  // Search page's Pathway-Connected Recommendations section actually uses.
   cellLinesViaPathway: (gene: string, diseaseFilter?: string, topK = 5) => {
     const q = new URLSearchParams()
     if (diseaseFilter) q.append('disease_filter', diseaseFilter)

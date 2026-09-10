@@ -25,7 +25,7 @@ from config import CELL_LINE_LOOKUP, MASTER_MERGED, OUTPUTS_DIR, PARQUET_DIR
 from api.models import AgenticRequest, ClassicalRequest
 from models.agentic.growth_properties import get_growth_properties
 from models.classical.ranker import FIXED_WEIGHTS, rank
-from models.classical.scorer import get_gene_role
+from models.classical.scorer import classify_gene, get_gene_role
 from models.classical.similarity import DATASET_CITATIONS, find_alternatives
 from models.graph.queries import (
     graph_to_json,
@@ -55,17 +55,22 @@ def _store_session(data: dict) -> str:
 
 
 # ── Learned-weight cache ──────────────────────────────────────────────────────
-_learned_weights_cache: dict | None = None
+# Cached per gene class, not one global set — pathway activity's value
+# genuinely varies by class (see weights_learned.optimise_weights_by_class),
+# so the weights actually applied to a query depend on classify_gene(gene).
+_learned_weights_by_class_cache: dict | None = None
 _learned_weights_lock = asyncio.Lock()
 
 
-async def _get_learned_weights() -> dict:
-    global _learned_weights_cache
+async def _get_learned_weights_for_gene(gene: str) -> dict:
+    global _learned_weights_by_class_cache
     async with _learned_weights_lock:
-        if _learned_weights_cache is None:
-            from models.classical.weights_learned import optimise_weights
-            _learned_weights_cache = await asyncio.to_thread(optimise_weights)
-    return _learned_weights_cache
+        if _learned_weights_by_class_cache is None:
+            from models.classical.weights_learned import optimise_weights_by_class
+            _learned_weights_by_class_cache = await asyncio.to_thread(optimise_weights_by_class)
+    by_class = _learned_weights_by_class_cache
+    gene_class = classify_gene(gene)
+    return by_class.get(gene_class) or by_class["tissue_specific"]
 
 
 # ── Lifespan: load heavy data once ───────────────────────────────────────────
@@ -240,7 +245,17 @@ def _build_classical_result(
         "quality_score":      round(_safe_float(row.get("quality_score")), 4),
         "context_score":      round(_safe_float(row.get("context_score")), 4),
         "geo_confirmation":   round(_safe_float(row.get("geo_confirmation")), 4),
+        "pathway_activity_score":  round(_safe_float(row.get("pathway_activity_score")), 4),
+        "pathway_genes_expressed": int(row.get("pathway_genes_expressed") or 0),
+        "pathway_genes_total":     int(row.get("pathway_genes_total") or 0),
         "n_sources":          int(row.get("n_sources") or 0),
+        "hpa_evidence":       row.get("hpa_evidence"),
+        "depmap_evidence":    row.get("depmap_evidence"),
+        "geo_evidence":       row.get("geo_evidence"),
+        "protein_evidence":   row.get("protein_evidence"),
+        "vs_next_rank":       row.get("vs_next_rank"),
+        "quality_explanation": row.get("quality_explanation") or "",
+        "context_explanation": row.get("context_explanation") or "",
         "gene_class":         row.get("gene_class"),
         "gene_role":          get_gene_role(gene),
         "growth_properties":  get_growth_properties(cvcl),
@@ -270,10 +285,17 @@ def _build_classical_result(
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/recommend/classical")
 async def recommend_classical(body: ClassicalRequest):
+    if body.exclude_genes and body.gene.upper() in [g.upper() for g in body.exclude_genes]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot search for {body.gene} and exclude it simultaneously.",
+        )
+
     t0 = time.time()
 
     weights = FIXED_WEIGHTS
-    # learned-weights disabled for speed - fixed weights are near-identical
+    if body.use_learned_weights:
+        weights = await _get_learned_weights_for_gene(body.gene)
 
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(
@@ -319,6 +341,7 @@ async def recommend_classical(body: ClassicalRequest):
         "query":   body.model_dump(),
         "model":   "classical",
         "results": results,
+        "weights_used": weights,
         "metadata": {
             "total_candidates":  total_candidates,
             "execution_time_ms": execution_ms,
@@ -334,6 +357,12 @@ async def recommend_classical(body: ClassicalRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/recommend/agentic")
 async def recommend_agentic(body: AgenticRequest):
+    if body.exclude_genes and body.gene.upper() in [g.upper() for g in body.exclude_genes]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot search for {body.gene} and exclude it simultaneously.",
+        )
+
     from models.agentic.pipeline import run as pipeline_run
 
     t0 = time.time()

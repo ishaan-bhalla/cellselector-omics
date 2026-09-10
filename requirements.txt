@@ -13,4 +13,3 @@ neo4j
 fastapi
 uvicorn
 pydantic
-neo4j

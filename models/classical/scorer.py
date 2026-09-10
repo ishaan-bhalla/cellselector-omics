@@ -13,11 +13,19 @@ from config import (
     SAMPLE_INFO,
 )
 
+# NOTE: 0.30+0.15+0.20+0.15+0.10 = 0.90, not the 1.00 stated when these
+# were given — same gap as the previous FIXED_WEIGHTS revision, just with
+# different individual numbers. geo_confirmation adds ±0.10 on top
+# (additive, not part of this weighted sum), so a perfect score with a GEO
+# confirmation bonus still reaches 1.00; without GEO data, the ceiling is
+# 0.90. Kept these exact values rather than silently rescaling them —
+# flagging again since the arithmetic still doesn't match the stated intent.
 FIXED_WEIGHTS = {
-    "rna":     0.50,
-    "protein": 0.10,
-    "quality": 0.25,
+    "rna":     0.35,
+    "protein": 0.15,
+    "quality": 0.20,
     "context": 0.15,
+    "pathway": 0.15,
 }
 
 # GEO confirmation bonus/penalty — additive, not part of weighted sum
@@ -26,9 +34,8 @@ GEO_PENALTY = -0.10
 
 GENE_CLASSES: dict[str, list[str]] = {
     "ubiquitous": [
-        "TP53", "PARP1", "CDK4", "CCND1", "ACTB",
-        "GAPDH", "RB1", "ATM", "BRCA1", "BRCA2",
-        "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
+        "PARP1", "CDK4", "CCND1", "ACTB",
+        "GAPDH", "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
     ],
     "loss_of_function": [
         "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
@@ -90,7 +97,13 @@ def classify_gene(gene: str) -> str:
 def load_mappings() -> tuple[dict, dict, dict]:
     """Return (hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl)."""
     lkp = pd.read_parquet(CELL_LINE_LOOKUP, columns=["cellosaurus_id", "hpa_name"])
-    hpa_to_cvcl = dict(zip(lkp["hpa_name"].dropna(), lkp["cellosaurus_id"].dropna()))
+    # Filter both columns from the SAME row-aligned frame before zipping —
+    # zipping two independently-.dropna()'d Series silently pairs values by
+    # position, not by original row, whenever the two columns have
+    # different NaN counts (hpa_name has many more NaNs than cellosaurus_id
+    # here, which shifted ~94% of pairs onto the wrong cell line).
+    lkp_hpa = lkp.dropna(subset=["hpa_name"])
+    hpa_to_cvcl = dict(zip(lkp_hpa["hpa_name"], lkp_hpa["cellosaurus_id"]))
 
     samp = pd.read_csv(SAMPLE_INFO, usecols=["DepMap_ID", "RRID"], low_memory=False)
     ach_to_cvcl = {r.DepMap_ID: r.RRID for r in samp.itertuples() if pd.notna(r.RRID)}
@@ -100,15 +113,54 @@ def load_mappings() -> tuple[dict, dict, dict]:
         usecols=["Geo_accession", "Cellosaurus_ID"],
         low_memory=False,
     )
-    gsm_to_cvcl = dict(
-        zip(geo["Geo_accession"].dropna(), geo["Cellosaurus_ID"].dropna())
-    )
+    geo_valid = geo.dropna(subset=["Geo_accession", "Cellosaurus_ID"])
+    gsm_to_cvcl = dict(zip(geo_valid["Geo_accession"], geo_valid["Cellosaurus_ID"]))
 
     return hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl
 
 
 def _pct_rank(series: pd.Series) -> np.ndarray:
     return series.rank(pct=True, method="average").values
+
+
+def _level_label_with_percentile(score: float | None, percentile: float | None) -> dict:
+    """
+    Qualitative Low/Medium/High label PLUS the precise underlying number,
+    so the coarse label never has to stand alone — a user can always drill
+    down to the exact score/percentile behind it.
+
+    score and percentile are typically the same value here: hpa_score /
+    depmap_score / protein_score are themselves already 0-1 percentile
+    ranks (see _pct_rank, used by score_rna_expression / score_protein_expression),
+    not raw magnitudes — so the "percentile" IS the score, not a
+    re-ranking of it. (A caller could pass a genuinely different
+    percentile if one were ever computed separately.)
+
+    Returns {"label", "score", "percentile"} — percentile pre-formatted
+    as "68th percentile" (or None) so callers can drop it straight into
+    a UI or an LLM prompt.
+    """
+    if score is None or pd.isna(score):
+        return {"label": "No data", "score": None, "percentile": None}
+
+    if score >= 0.66:
+        label = "High"
+    elif score >= 0.33:
+        label = "Medium"
+    else:
+        label = "Low"
+
+    pct_display = (
+        f"{percentile * 100:.0f}th percentile"
+        if percentile is not None and pd.notna(percentile)
+        else None
+    )
+
+    return {
+        "label":      label,
+        "score":      round(float(score), 3),
+        "percentile": pct_display,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
