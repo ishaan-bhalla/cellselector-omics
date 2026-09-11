@@ -2,9 +2,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from models.classical.scorer import classify_gene, load_mappings
+from models.classical.scorer import classify_gene, load_mappings, rank_sort
 from models.classical.weights_learned import (
     VALIDATION_SET,
+    _LOF_PRODUCTION_MUTATION_WEIGHT,
     _build_name_to_cvcl,
     _precompute_scores,
     _run_optimisation,
@@ -45,13 +46,24 @@ def grid_search_pathway_weight():
         classified.setdefault(classify_gene(gene), []).append(gene)
 
     print("\nFitting each class's OWN 4D (no-pathway) baseline — the "
-          "'other 4 weights' the grid search holds fixed while pathway varies...")
+          "'other weights' the grid search holds fixed while pathway varies...")
     base_weights: dict[str, dict] = {}
     for cls, genes in classified.items():
         subset = {g: VALIDATION_SET[g] for g in genes}
-        base_weights[cls] = _run_optimisation(
+        base_4d = _run_optimisation(
             subset, scores_cache, label=f"{cls} (4D baseline)", include_pathway=False
         )
+        if cls == "loss_of_function":
+            # LOF's production vector already spends 0.80 on mutation; the
+            # pathway sweep below runs on top of that (all keys rescaled by
+            # (1-pw)), testing whether ANY pathway weight helps LOF once
+            # mutation is in — expected: no.
+            mw = _LOF_PRODUCTION_MUTATION_WEIGHT
+            base_weights[cls] = {
+                **{k: v * (1 - mw) for k, v in base_4d.items()}, "mutation": mw,
+            }
+        else:
+            base_weights[cls] = base_4d
 
     print()
     print("=" * 60)
@@ -85,18 +97,20 @@ def grid_search_pathway_weight():
                 df = scores_cache[gene].copy()
 
                 df["test_score"] = (
-                    weights["rna"]     * df["rna_score"]
-                    + weights["protein"] * df["protein_score"]
-                    + weights["quality"] * df["quality_score"]
-                    + weights["context"] * df["context_score"]
-                    + weights["pathway"] * df.get("pathway_activity_score", 0.0)
+                    weights.get("rna", 0.0)     * df["rna_score"]
+                    + weights.get("protein", 0.0) * df["protein_score"]
+                    + weights.get("quality", 0.0) * df["quality_score"]
+                    + weights.get("context", 0.0) * df["context_score"]
+                    + weights.get("pathway", 0.0) * df.get("pathway_activity_score", 0.0)
+                    + weights.get("mutation", 0.0) * df.get("mutation_impact_score", 0.0)
                     + df["geo_confirmation"]
                 ).clip(0.0, 1.0)
 
-                # cellosaurus_id is the DataFrame's index (see
-                # _precompute_scores' .set_index), not a column — reset_index
-                # puts it back as one, matching mrr_score()'s own pattern.
-                df = df.sort_values("test_score", ascending=False).reset_index()
+                # Multi-key tie-break (scorer.rank_sort): test_score clips at
+                # 1.0, so saturated lines are separated by raw
+                # mutation_impact_score / rna_score / quality_score, then
+                # cellosaurus_id. Also puts cellosaurus_id back as a column.
+                df = rank_sort(df, "test_score")
 
                 known_cvcls = {
                     name_to_cvcl[n.lower()]

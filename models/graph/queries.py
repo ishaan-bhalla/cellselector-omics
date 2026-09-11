@@ -133,6 +133,110 @@ def query_best_cell_lines_via_pathway(
     return grouped[:top_k]
 
 
+def get_mutations_for_gene(gene: str, min_impact: float = 0.0) -> list[dict]:
+    """
+    All HAS_MUTATION edges from `gene` (see ingest.ingest_mutation_edges),
+    highest impact first. Used as a graph-backed path for the mutation
+    scorer and for agentic rationale generation.
+
+    Returns [{cellosaurus_id, official_name, protein_change, hotspot,
+              likely_lof, clinical_significance, impact_score}, ...].
+    """
+    query = """
+    MATCH (g:Gene {symbol: $gene})-[m:HAS_MUTATION]->(c:CellLine)
+    WHERE m.impact_score >= $min_impact
+    RETURN c.cellosaurus_id       AS cellosaurus_id,
+           m.protein_change        AS protein_change,
+           m.hotspot               AS hotspot,
+           m.likely_lof            AS likely_lof,
+           m.clinical_significance AS clinical_significance,
+           m.impact_score          AS impact_score
+    ORDER BY m.impact_score DESC
+    """
+    try:
+        results = run_query(query, {"gene": gene, "min_impact": min_impact})
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (get_mutations_for_gene): {exc}")
+        return []
+    names = _cell_line_names()
+    for r in results:
+        r["official_name"] = names.get(r["cellosaurus_id"], r["cellosaurus_id"])
+    return results
+
+
+def find_cell_lines_by_mutation_and_lineage(
+    gene: str,
+    disease_substring: str,
+    min_impact: float = 0.5,
+) -> list[dict]:
+    """
+    Cross-dataset multi-hop query: cell lines with a damaging variant in
+    `gene` (DepMap mutation data, via HAS_MUTATION edges) AND a disease
+    lineage matching `disease_substring` (Cellosaurus/nomenclature metadata,
+    via the CellLine.disease property set by enrich_cell_line_lineage).
+
+    Mutation evidence and lineage metadata coexist today only in the flat
+    parquet spine; here they are one traversal over the same integrated
+    graph that also holds pathway (MEMBER_OF/CONTAINS) and expression
+    (EXPRESSED_IN) structure — the "coherent cross-dataset analysis" the
+    brief's Objective #1 calls for.
+
+    Returns [{cellosaurus_id, official_name, disease, lineage,
+              protein_change, impact_score}, ...], highest impact first.
+    """
+    query = """
+    MATCH (g:Gene {symbol: $gene})-[m:HAS_MUTATION]->(c:CellLine)
+    WHERE m.impact_score >= $min_impact
+      AND c.disease IS NOT NULL
+      AND toLower(c.disease) CONTAINS toLower($disease_substring)
+    RETURN c.cellosaurus_id       AS cellosaurus_id,
+           c.disease              AS disease,
+           c.lineage              AS lineage,
+           m.protein_change       AS protein_change,
+           m.impact_score         AS impact_score
+    ORDER BY m.impact_score DESC, c.cellosaurus_id
+    """
+    try:
+        results = run_query(query, {
+            "gene": gene,
+            "disease_substring": disease_substring,
+            "min_impact": min_impact,
+        })
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (find_cell_lines_by_mutation_and_lineage): {exc}")
+        return []
+    names = _cell_line_names()
+    for r in results:
+        r["official_name"] = names.get(r["cellosaurus_id"], r["cellosaurus_id"])
+    return results
+
+
+def find_receptor_genes_in_pathway(gene: str) -> list[dict]:
+    """
+    Genes sharing a KEGG pathway with `gene`, filtered to those carrying a
+    receptor / marker / tumor-suppressor / oncogene role — pathway topology
+    (MEMBER_OF/CONTAINS) combined with gene-role metadata (Gene.role, set by
+    enrich_gene_roles) in one traversal.
+
+    Returns [{gene_symbol, role, pathway_name}, ...].
+    """
+    query = """
+    MATCH (g:Gene {symbol: $gene})-[:MEMBER_OF]->(p:Pathway)
+          -[:CONTAINS]->(neighbor:Gene)
+    WHERE neighbor.role IS NOT NULL
+      AND neighbor.symbol <> $gene
+    RETURN DISTINCT neighbor.symbol AS gene_symbol,
+           neighbor.role            AS role,
+           p.name                   AS pathway_name
+    ORDER BY gene_symbol
+    """
+    try:
+        return run_query(query, {"gene": gene})
+    except Exception as exc:
+        print(f"[queries] Neo4j unavailable (find_receptor_genes_in_pathway): {exc}")
+        return []
+
+
 def graph_to_json(gene: str) -> dict:
     """
     Return the full subgraph around a gene as nodes+edges JSON for frontend
