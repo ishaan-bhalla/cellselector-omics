@@ -147,10 +147,26 @@ def retrieve_evidence(
         else None
     )
 
+    # ── 5b. Mutation status (PRIMARY signal for loss-of-function genes) ─────
+    # rank() merges score_mutation_impact() onto every result row, so
+    # mutation_impact_score / mutation_detail are read straight off the row
+    # (same reuse pattern as CRISPR dependency above — no re-query).
+    mut_score  = top_result_df_row.get("mutation_impact_score")
+    mut_detail = top_result_df_row.get("mutation_detail")
+    mutation_evidence: dict | None = (
+        {
+            "impact_score": round(float(mut_score), 4),
+            "detail":       str(mut_detail),
+        }
+        if pd.notna(mut_score) and float(mut_score or 0) > 0 and mut_detail
+        else None
+    )
+
     # ── 6. Cell line metadata ────────────────────────────────────────────────
     master_cols = [
         "cellosaurus_id", "official_name", "evidence_count",
         "has_mutations", "has_fusions", "MSIScore", "Ploidy",
+        "has_hpa_expr", "has_depmap_expr", "has_geo_expr", "has_proteomics",
     ]
     master = pd.read_parquet(MASTER_MERGED, columns=master_cols)
     m_row  = master[master["cellosaurus_id"] == cellosaurus_id]
@@ -161,29 +177,56 @@ def retrieve_evidence(
         "disease":        str(top_result_df_row.get("disease") or "unknown"),
         "lineage":        str(top_result_df_row.get("lineage") or "unknown"),
     }
-    if len(m_row) > 0:
-        r = m_row.iloc[0]
+    m_cl = m_row.iloc[0] if len(m_row) > 0 else None
+    if m_cl is not None:
         metadata.update({
-            "evidence_count": int(r.get("evidence_count", 0) or 0),
-            "has_mutations":  bool(r.get("has_mutations", False)),
-            "has_fusions":    bool(r.get("has_fusions", False)),
-            "msi_score":      round(float(r["MSIScore"]), 3) if pd.notna(r.get("MSIScore")) else None,
-            "ploidy":         round(float(r["Ploidy"]), 2)   if pd.notna(r.get("Ploidy"))  else None,
+            "evidence_count": int(m_cl.get("evidence_count", 0) or 0),
+            "has_mutations":  bool(m_cl.get("has_mutations", False)),
+            "has_fusions":    bool(m_cl.get("has_fusions", False)),
+            "msi_score":      round(float(m_cl["MSIScore"]), 3) if pd.notna(m_cl.get("MSIScore")) else None,
+            "ploidy":         round(float(m_cl["Ploidy"]), 2)   if pd.notna(m_cl.get("Ploidy"))  else None,
         })
+
+    # ── 6b. Data coverage — exactly which of the 5 evidence sources have
+    # usable data for THIS gene in THIS cell line. Two facts per source:
+    #   cell_line_in_dataset — from master_merged's coverage flags (the same
+    #     has_*_expr / has_proteomics columns used by similarity.py and the
+    #     API); whether the line appears in that dataset at all.
+    #   present — pair-level: whether the retrieval above actually found a
+    #     value for THIS gene. A source counts as missing for gap-flagging
+    #     whenever `present` is False, whichever reason.
+    # DepMap CRISPR has no master flag (added later, separate parquet) — its
+    # presence is purely pair-level (a dependency score for this gene/line).
+    def _cl_flag(col: str) -> bool:
+        return bool(m_cl[col]) if (m_cl is not None and pd.notna(m_cl.get(col))) else False
+
+    data_coverage = {
+        "HPA RNA expression":      {"present": bool(hpa_evidence),
+                                    "cell_line_in_dataset": _cl_flag("has_hpa_expr")},
+        "DepMap RNA expression":   {"present": bool(dep_evidence),
+                                    "cell_line_in_dataset": _cl_flag("has_depmap_expr")},
+        "GEO expression":          {"present": bool(geo_evidence),
+                                    "cell_line_in_dataset": _cl_flag("has_geo_expr")},
+        "CCLE proteomics":         {"present": bool(prot_evidence),
+                                    "cell_line_in_dataset": _cl_flag("has_proteomics")},
+        "DepMap CRISPR dependency": {"present": crispr_evidence is not None,
+                                     "cell_line_in_dataset": crispr_evidence is not None},
+    }
 
     # ── 7. Score breakdown ───────────────────────────────────────────────────
     def _f(key: str) -> float:
         return round(float(top_result_df_row.get(key) or 0), 4)
 
     scores = {
-        "rna_score":        _f("rna_score"),
-        "hpa_score":        _f("hpa_score"),
-        "depmap_score":     _f("depmap_score"),
-        "protein_score":    _f("protein_score"),
-        "quality_score":    _f("quality_score"),
-        "context_score":    _f("context_score"),
-        "geo_confirmation": _f("geo_confirmation"),
-        "final_score":      _f("final_score"),
+        "rna_score":             _f("rna_score"),
+        "hpa_score":             _f("hpa_score"),
+        "depmap_score":          _f("depmap_score"),
+        "protein_score":         _f("protein_score"),
+        "quality_score":         _f("quality_score"),
+        "context_score":         _f("context_score"),
+        "mutation_impact_score": _f("mutation_impact_score"),
+        "geo_confirmation":      _f("geo_confirmation"),
+        "final_score":           _f("final_score"),
     }
 
     # ── 8. PubMed literature ─────────────────────────────────────────────────
@@ -213,6 +256,8 @@ def retrieve_evidence(
         "geo_expression":        geo_evidence,
         "proteomics":            prot_evidence,
         "crispr_dependency":     crispr_evidence,
+        "mutation":              mutation_evidence,
+        "data_coverage":         data_coverage,
         # Precise {label, score, percentile} dicts computed once in rank()
         # (see ranker.add_rank_comparisons's neighbors) and read straight
         # off top_result_df_row — same reuse pattern as crispr_dependency
@@ -296,6 +341,41 @@ def format_context(gene: str, evidence: dict) -> str:
         f"despite being transcribed."
     )
 
+    mutation = evidence.get("mutation")
+    if mutation:
+        mutation_section = (
+            "MUTATION STATUS (DepMap somatic variant calls):\n"
+            f"- {mutation['detail']}\n"
+            f"- Mutation impact score: {mutation['impact_score']:.2f}  "
+            f"(0-1; combines hotspot / predicted loss-of-function / clinical "
+            f"significance / AlphaMissense+REVEL evidence, worst variant wins)\n"
+            f"- For a loss-of-function target this is the PRIMARY reason a line "
+            f"is a relevant model — a damaging {gene} mutation, not expression "
+            f"level, is what scientists select on. Cite the specific protein "
+            f"change above in your justification."
+        )
+    elif meta.get("has_mutations"):
+        # Somatic variant calls exist for this line and none damaging the
+        # gene turned up — genuinely informative "wild-type".
+        mutation_section = (
+            "MUTATION STATUS (DepMap somatic variant calls):\n"
+            f"- Somatic variant calls EXIST for this cell line, and no damaging "
+            f"{gene} variant is among them — {gene} is most likely wild-type here.\n"
+            f"- For a loss-of-function target that makes this line a CONTROL, "
+            f"not a disease model."
+        )
+    else:
+        # No somatic variant calls at all for this line — absence of data,
+        # NOT evidence of wild-type status.
+        mutation_section = (
+            "MUTATION STATUS (DepMap somatic variant calls):\n"
+            f"- NO somatic variant calls exist for this cell line in DepMap. "
+            f"{gene} mutation status is UNKNOWN — do NOT state or imply it is "
+            f"wild-type (absence of data is not evidence of absence). If "
+            f"mutation status matters for the intended experiment it must be "
+            f"verified independently."
+        )
+
     geo_conf = scores["geo_confirmation"]
     geo_conf_str = (
         "GEO CONFIRMS (+0.10 bonus)"  if geo_conf > 0 else
@@ -334,6 +414,38 @@ def format_context(gene: str, evidence: dict) -> str:
         f"- Proteomics: {_ev_line('protein_evidence')}"
     )
 
+    # ── Data coverage — the authoritative present/absent list the TRADE-OFFS
+    # section must reproduce verbatim. Built from master_merged's coverage
+    # flags + pair-level retrieval (see retrieve_evidence section 6b), NOT
+    # left for the LLM to infer from the "not available" lines above.
+    cov = evidence.get("data_coverage", {})
+    cov_lines = []
+    missing = []
+    for src, c in cov.items():
+        if c["present"]:
+            cov_lines.append(f"  [PRESENT] {src}")
+        else:
+            if "CRISPR" in src:
+                # no cell-line-level flag exists for CRISPR — can't tell
+                # "line not screened" from "gene not essential-tested here"
+                reason = f"no CRISPR dependency score for {gene} in this line"
+            elif not c["cell_line_in_dataset"]:
+                reason = "cell line absent from this dataset"
+            else:
+                reason = f"{gene} not measured in this line"
+            cov_lines.append(f"  [MISSING] {src} — {reason}")
+            missing.append(src)
+    missing_line = (
+        f"MISSING SOURCES ({len(missing)} of 5): {', '.join(missing)}"
+        if missing else
+        "MISSING SOURCES: none — all 5 evidence sources have data for this pair"
+    )
+    coverage_section = (
+        "DATA COVERAGE FOR THIS GENE / CELL LINE — which of the 5 evidence "
+        "sources have usable data here (authoritative; do not infer):\n"
+        + "\n".join(cov_lines) + "\n" + missing_line
+    )
+
     return f"""CELL LINE: {meta['official_name']} ({evidence['cellosaurus_id']})
 GENE QUERIED: {gene}{gene_role_line}
 
@@ -346,7 +458,11 @@ EXPRESSION EVIDENCE:
 
 {precise_section}
 
+{coverage_section}
+
 {crispr_section}
+
+{mutation_section}
 
 CELL LINE PROFILE:
 - Disease:              {meta.get('disease', 'unknown')}
@@ -362,6 +478,7 @@ SCORES:
 - Protein score:        {scores['protein_score']:.2f}
 - Data quality score:   {scores['quality_score']:.2f}
 - Context score:        {scores['context_score']:.2f}
+- Mutation impact score: {scores.get('mutation_impact_score', 0.0):.2f}
 - GEO confirmation:     {scores['geo_confirmation']:+.2f}
 - Final fit score:      {scores['final_score']:.2f}
 
@@ -373,4 +490,5 @@ CULTURE/ASSAY CONTEXT:
 {format_growth_properties(evidence.get("growth_properties"))}
 Consider doubling time when assessing suitability for time-sensitive assays (e.g. high-throughput screening favours faster-doubling lines).
 
-Use these papers to support your justification where relevant. Cite as [1], [2] etc."""
+Use these papers to support your justification where relevant. Cite as [1], [2] etc.
+In the TRADE-OFFS section, name every source listed after "MISSING SOURCES" above, exactly as written. If it says "none", say all five sources have data."""

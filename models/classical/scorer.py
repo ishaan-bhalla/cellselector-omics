@@ -36,10 +36,16 @@ GENE_CLASSES: dict[str, list[str]] = {
     "ubiquitous": [
         "PARP1", "CDK4", "CCND1", "ACTB",
         "GAPDH", "MDM2", "CDK2", "CDK6", "PCNA", "MKI67",
+        # TP53: its validation targets (HCT116, U-2 OS, MCF-7) are canonical
+        # WILD-TYPE-p53 reference lines — the opposite selection criterion
+        # from the mutation-driven LOF targets used for BRCA1/BRCA2/RB1/ATM.
+        # Mutation-primary LOF scoring correctly sank those wild-type lines,
+        # so TP53 does not belong in loss_of_function for this pipeline.
+        "TP53",
     ],
     "loss_of_function": [
         "BRCA1", "BRCA2", "RB1", "ATM", "PTEN",
-        "APC", "VHL", "MLH1", "MSH2", "TP53",
+        "APC", "VHL", "MLH1", "MSH2",
     ],
 }
 
@@ -117,6 +123,40 @@ def load_mappings() -> tuple[dict, dict, dict]:
     gsm_to_cvcl = dict(zip(geo_valid["Geo_accession"], geo_valid["Cellosaurus_ID"]))
 
     return hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl
+
+
+_TIE_BREAK_KEYS = ("mutation_impact_score", "rna_score", "quality_score")
+
+
+def rank_sort(df: "pd.DataFrame", score_col: str) -> "pd.DataFrame":
+    """
+    Sort `df` for ranking / reciprocal-rank: primary key `score_col`
+    descending, then a fixed chain of raw (pre-clip) discriminators, then
+    cellosaurus_id ascending as the final deterministic fallback.
+
+    final_score is clipped to [0, 1] (see ranker.rank / mrr_score), so
+    strongly-mutated loss_of_function lines — and strong-expression + GEO
+    tissue_specific lines — pile up at an identical primary score of exactly
+    1.0. Without these extra keys, the order among them is just whatever row
+    order the merges happened to leave, and the "winner" of a large tie
+    block is decided by cellosaurus_id sort alone (which inflated BRCA1's
+    LOO-CV RR to 1.0). mutation_impact_score and rna_score are NOT clipped,
+    so they still separate those rows.
+
+    Returns a new frame with cellosaurus_id as a column and a clean
+    RangeIndex (callers read rank as row position).
+    """
+    if "cellosaurus_id" not in df.columns:
+        df = df.reset_index()
+    keys = [score_col]
+    ascending = [False]
+    for k in _TIE_BREAK_KEYS:
+        if k != score_col and k in df.columns:
+            keys.append(k)
+            ascending.append(False)
+    keys.append("cellosaurus_id")
+    ascending.append(True)
+    return df.sort_values(keys, ascending=ascending, kind="stable").reset_index(drop=True)
 
 
 def _pct_rank(series: pd.Series) -> np.ndarray:
@@ -312,12 +352,20 @@ def score_rna_expression(
     )
 
     def _geo_conf(row):
-        if pd.isna(row["geo_n_samples"]):
+        n = row["geo_n_samples"]
+        if pd.isna(n):
             return 0.0                               # no GEO data → neutral
+        # Scale the ±0.10 by GEO sample count: one sample is weak evidence of
+        # agreement (or disagreement), several concordant samples is strong.
+        #   n >= 3 → full   | n == 2 → 0.6x (+/-0.06) | n == 1 → 0.3x (+/-0.03)
+        # The geo_expressed consistency gate (median > 0 AND cv < 0.5) is
+        # unchanged — only the magnitude now depends on n.
+        n = int(n)
+        scale = 1.0 if n >= 3 else (0.6 if n == 2 else (0.3 if n == 1 else 0.0))
         if row["geo_expressed"]:
-            return GEO_BONUS                         # GEO confirms expression
+            return round(GEO_BONUS * scale, 3)       # GEO confirms expression
         elif row["rna_score"] > 0:
-            return GEO_PENALTY                       # GEO contradicts primary
+            return round(GEO_PENALTY * scale, 3)     # GEO contradicts primary
         return 0.0                                   # both say absent → neutral
 
     result["geo_confirmation"] = result.apply(_geo_conf, axis=1)
@@ -342,12 +390,18 @@ def score_protein_expression(gene: str, ach_to_cvcl: dict) -> pd.DataFrame:
         columns=["original_id", "expression_value"],
     )
     if len(prot_raw) == 0:
-        return pd.DataFrame(columns=["cellosaurus_id", "protein_score"])
+        return pd.DataFrame({
+            "cellosaurus_id": pd.Series(dtype="object"),
+            "protein_score":  pd.Series(dtype="float64"),
+        })
 
     prot_raw["cellosaurus_id"] = prot_raw["original_id"].map(ach_to_cvcl)
     prot_raw = prot_raw.dropna(subset=["cellosaurus_id"])
     if len(prot_raw) == 0:
-        return pd.DataFrame(columns=["cellosaurus_id", "protein_score"])
+        return pd.DataFrame({
+            "cellosaurus_id": pd.Series(dtype="object"),
+            "protein_score":  pd.Series(dtype="float64"),
+        })
 
     agg = prot_raw.groupby("cellosaurus_id")["expression_value"].mean()
     return pd.DataFrame({"cellosaurus_id": agg.index, "protein_score": _pct_rank(agg)})

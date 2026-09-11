@@ -4,7 +4,7 @@ import lightgbm as lgb
 
 FEATURE_COLUMNS = [
     "rna_score", "protein_score", "quality_score",
-    "context_score", "pathway_activity_score"
+    "context_score", "pathway_activity_score", "mutation_impact_score"
 ]
 
 
@@ -93,6 +93,10 @@ def train_lambdamart(
         "min_data_in_leaf": 5,
         "verbose": -1,
         "force_row_wise": True,
+        # Reproducible across runs: no multithread FP-order variance, fixed seed.
+        "deterministic": True,
+        "num_threads": 1,
+        "seed": 42,
     }
 
     model = lgb.train(

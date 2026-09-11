@@ -7,11 +7,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import CELL_LINE_LOOKUP
 from models.classical.pathway_scorer import score_pathway_activity
+from models.classical.mutation_scorer import score_mutation_impact
 from models.classical.scorer import (
     FIXED_WEIGHTS,
     _level_label_with_percentile,
     classify_gene,
     load_mappings,
+    rank_sort,
     score_context,
     score_crispr_dependency,
     score_data_quality,
@@ -39,7 +41,7 @@ def _get_learned_weights_by_class() -> dict:
     if _CACHED_LEARNED_WEIGHTS_BY_CLASS is None:
         from models.classical.weights_learned import optimise_weights_by_class
         print("[ranker] Computing per-gene-class learned weights (one-time, cached)...")
-        _CACHED_LEARNED_WEIGHTS_BY_CLASS = optimise_weights_by_class()
+        _CACHED_LEARNED_WEIGHTS_BY_CLASS = optimise_weights_by_class(include_mutation=True)
     return _CACHED_LEARNED_WEIGHTS_BY_CLASS
 
 
@@ -181,10 +183,18 @@ def rank(
     """
     gene_class = classify_gene(gene)
     if weights is None:
-        weights = (
-            _select_class_weights(_get_learned_weights_by_class(), gene_class)
-            if use_learned_weights else FIXED_WEIGHTS
-        )
+        if gene_class == "loss_of_function":
+            # LOF genes rank on damaging-mutation status, not expression —
+            # use the mutation-aware learned class weights (mutation=0.80 +
+            # a rescaled expression baseline; see
+            # weights_learned._apply_lof_mutation_weight) regardless of
+            # use_learned_weights. A caller that passes an explicit `weights`
+            # dict still gets exactly that.
+            weights = _select_class_weights(_get_learned_weights_by_class(), "loss_of_function")
+        elif use_learned_weights:
+            weights = _select_class_weights(_get_learned_weights_by_class(), gene_class)
+        else:
+            weights = FIXED_WEIGHTS
 
     hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
 
@@ -197,8 +207,10 @@ def rank(
         print(f"No expression data found for gene: {gene}")
         return pd.DataFrame()
 
+    # sorted(): a bare set → list is hash-seed-dependent, which would make
+    # tie-breaking in the final sort_values below vary between processes.
     result = (
-        pd.DataFrame({"cellosaurus_id": list(all_cvcl)})
+        pd.DataFrame({"cellosaurus_id": sorted(all_cvcl)})
         .merge(rna_df, on="cellosaurus_id", how="left")
         .merge(protein_df, on="cellosaurus_id", how="left")
     )
@@ -234,17 +246,21 @@ def rank(
         }
     )
 
-    result["rna_score"]       = result["rna_score"].fillna(0.0)
-    result["protein_score"]   = result["protein_score"].fillna(0.0)
-    result["geo_confirmation"] = result["geo_confirmation"].fillna(0.0)
+    # astype(float): a left-merge against an empty score frame (e.g. a gene
+    # with no CCLE proteomics) yields an object-dtype all-NaN column;
+    # .fillna(0.0) then leaves it object-dtype, which propagates into
+    # final_score and breaks numeric ops like .describe() downstream.
+    result["rna_score"]        = result["rna_score"].fillna(0.0).astype(float)
+    result["protein_score"]    = result["protein_score"].fillna(0.0).astype(float)
+    result["geo_confirmation"]  = result["geo_confirmation"].fillna(0.0).astype(float)
 
     quality_df = score_data_quality(all_cvcl, rna_df, protein_df)
     result = result.merge(quality_df, on="cellosaurus_id", how="left")
-    result["quality_score"] = result["quality_score"].fillna(0.0)
+    result["quality_score"] = result["quality_score"].fillna(0.0).astype(float)
 
     context_df = score_context(all_cvcl, disease_filter, lineage_filter)
     result = result.merge(context_df, on="cellosaurus_id", how="left")
-    result["context_score"] = result["context_score"].fillna(0.0)
+    result["context_score"] = result["context_score"].fillna(0.0).astype(float)
 
     # ── Plain-English explanations for the two composite scores — these
     # blend multiple signals into one number, which is exactly why they
@@ -277,14 +293,53 @@ def rank(
         result["pathway_genes_expressed"] = 0
         result["pathway_genes_total"] = 0
 
-    result["final_score"] = (
-        weights["rna"]     * result["rna_score"]
-        + weights["protein"] * result["protein_score"]
-        + weights["quality"] * result["quality_score"]
-        + weights["context"] * result["context_score"]
-        + weights.get("pathway", 0.0) * result["pathway_activity_score"]
-        + result["geo_confirmation"]   # additive, not weighted
-    )
+    # ── Mutation impact (PRIMARY signal for loss-of-function genes) ──────────
+    # LOF genes (BRCA1, TP53, ...) are chosen by researchers on damaging
+    # mutation status, not expression level. For other classes it's a small
+    # secondary signal at most (activating mutations reinforcing an
+    # expression-based pick). See models/classical/mutation_scorer.py.
+    try:
+        mutation_df = score_mutation_impact(gene)
+        result = result.merge(mutation_df, on="cellosaurus_id", how="left")
+        result["mutation_impact_score"] = result["mutation_impact_score"].fillna(0.0).astype(float)
+        result["mutation_detail"] = result["mutation_detail"].fillna("")
+    except Exception as exc:
+        print(f"[ranker] Mutation scoring failed: {exc}")
+        result["mutation_impact_score"] = 0.0
+        result["mutation_detail"] = ""
+
+    if gene_class == "loss_of_function" and "mutation" in weights:
+        # Mutation-primary LOF vector {mutation, rna, protein, quality,
+        # context} (no pathway) — see weights_learned._apply_lof_mutation_weight.
+        # Gated on the "mutation" key so an expression-only eval baseline
+        # config passed for a LOF gene still runs the standard formula below
+        # (unchanged from its historical behaviour).
+        result["final_score"] = (
+            weights["mutation"] * result["mutation_impact_score"]
+            + weights.get("rna", 0.0)     * result["rna_score"]
+            + weights.get("protein", 0.0) * result["protein_score"]
+            + weights.get("quality", 0.0) * result["quality_score"]
+            + weights.get("context", 0.0) * result["context_score"]
+            + result["geo_confirmation"]   # additive, not weighted
+        )
+    else:
+        # tissue_specific / ubiquitous (and LOF with a legacy expression-only
+        # weights dict): unchanged expression formula, plus a small fixed
+        # mutation bonus for tissue_specific only (an activating oncogene /
+        # RTK mutation reinforcing the expression-based ranking).
+        mutation_bonus = (
+            0.05 * result["mutation_impact_score"]
+            if gene_class == "tissue_specific" else 0.0
+        )
+        result["final_score"] = (
+            weights["rna"]     * result["rna_score"]
+            + weights["protein"] * result["protein_score"]
+            + weights["quality"] * result["quality_score"]
+            + weights["context"] * result["context_score"]
+            + weights.get("pathway", 0.0) * result["pathway_activity_score"]
+            + result["geo_confirmation"]   # additive, not weighted
+            + mutation_bonus
+        )
     result["final_score"] = result["final_score"].clip(0.0, 1.0)
     result["gene_class"] = classify_gene(gene)
 
@@ -312,7 +367,10 @@ def rank(
     lkp = pd.read_parquet(CELL_LINE_LOOKUP, columns=["cellosaurus_id", "official_name"])
     result = result.merge(lkp, on="cellosaurus_id", how="left")
 
-    result = result.sort_values("final_score", ascending=False)
+    # Multi-key tie-break: final_score is clipped to 1.0, so mutated-LOF and
+    # strong-expression lines saturate; mutation_impact_score / rna_score /
+    # quality_score (unclipped) break those ties before cellosaurus_id does.
+    result = rank_sort(result, "final_score")
     if top_n is not None:
         result = result.head(top_n)
 
@@ -338,6 +396,7 @@ def rank(
         "hpa_evidence", "depmap_evidence", "geo_evidence", "protein_evidence",
         "vs_next_rank", "quality_explanation", "context_explanation",
         "pathway_activity_score", "pathway_genes_expressed", "pathway_genes_total",
+        "mutation_impact_score", "mutation_detail",
     ]
     if exclude_genes:
         out_cols.append("exclusion_warning")
@@ -369,15 +428,17 @@ def explain_rank_difference(row_a: pd.Series, row_b: pd.Series, weights: dict) -
     row_a ranks above/below row_b: which weighted score component
     contributed the most to the gap, and by how much.
     """
-    components = ["rna", "protein", "quality", "context", "pathway"]
+    components = ["rna", "protein", "quality", "context", "pathway", "mutation"]
+    _col = {"pathway": "pathway_activity_score", "mutation": "mutation_impact_score"}
+    _wfallback = {"mutation": 0.0}  # not weighted outside loss_of_function
     diffs = []
     for comp in components:
-        col = f"{comp}_score" if comp != "pathway" else "pathway_activity_score"
+        col = _col.get(comp, f"{comp}_score")
         val_a = row_a.get(col, 0) or 0
         val_b = row_b.get(col, 0) or 0
         # weights.get(...): learned weights don't carry a "pathway" key
         # (see rank()'s docstring) — same 0.10 fallback used in final_score.
-        weighted_diff = weights.get(comp, 0.10) * (val_a - val_b)
+        weighted_diff = weights.get(comp, _wfallback.get(comp, 0.10)) * (val_a - val_b)
         diffs.append((comp, val_a, val_b, weighted_diff))
 
     diffs.sort(key=lambda x: abs(x[3]), reverse=True)

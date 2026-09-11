@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import numpy as np
 
-from models.classical.scorer import load_mappings
+from models.classical.scorer import load_mappings, rank_sort
 from models.classical.weights_learned import VALIDATION_SET, _build_name_to_cvcl, _precompute_scores
 from models.classical.rrf_ranker import compute_rrf_score
 from models.classical.lambdamart_ranker import (
@@ -92,10 +92,11 @@ def _aligned_rrs(per_gene_a: dict, per_gene_b: dict) -> tuple[list, list, list]:
 
 def compute_rr(df, score_col, known_cvcls):
     """Reciprocal rank for one gene given a score column."""
-    # cellosaurus_id is the DataFrame's index (see
-    # weights_learned._precompute_scores' .set_index), not a column —
-    # reset_index puts it back as one before we can read row["cellosaurus_id"].
-    df_sorted = df.sort_values(score_col, ascending=False).reset_index()
+    # Multi-key tie-break (scorer.rank_sort): RRF / LambdaMART scores can tie,
+    # and for a fused mutation source the saturated-LOF blocks recur — raw
+    # mutation_impact_score / rna_score / quality_score break ties before
+    # cellosaurus_id. Also puts cellosaurus_id back as a column.
+    df_sorted = rank_sort(df, score_col)
     for i, (_, row) in enumerate(df_sorted.iterrows(), 1):
         if row["cellosaurus_id"] in known_cvcls:
             return 1.0 / i
@@ -139,6 +140,8 @@ def run_comparison():
 
     base_cols = ["rna_score", "protein_score", "quality_score", "context_score"]
     pathway_cols = base_cols + ["pathway_activity_score"]
+    mutation_cols = base_cols + ["mutation_impact_score"]
+    all_cols = base_cols + ["pathway_activity_score", "mutation_impact_score"]
 
     # ============================================
     # CONFIG D: RRF (4 sources, no pathway), k=60
@@ -159,6 +162,16 @@ def run_comparison():
     # CONFIG E2: RRF (5 sources, WITH pathway), k=10 — sensitivity check
     # ============================================
     mrr_e2, per_gene_e2 = run_rrf_config("CONFIG E2: RRF (5 sources w/ pathway, k=10, sensitivity)", pathway_cols, k=10)
+
+    # ============================================
+    # CONFIG G: RRF (5 sources w/ mutation), k=60
+    # ============================================
+    mrr_g, per_gene_g = run_rrf_config("CONFIG G: RRF (5 sources w/ mutation, k=60)", mutation_cols, k=60)
+
+    # ============================================
+    # CONFIG H: RRF (6 sources: pathway + mutation), k=60
+    # ============================================
+    mrr_h, per_gene_h = run_rrf_config("CONFIG H: RRF (6 sources: pathway+mutation, k=60)", all_cols, k=60)
 
     # ============================================
     # CONFIG F: LambdaMART (LOO-CV — retrain per fold)
@@ -223,11 +236,13 @@ def run_comparison():
     sig_results = {}
     if per_gene_a is not None:
         for cfg_name, per_gene in [
-            ("D  (RRF, 4 src, k=60)",  per_gene_d),
-            ("D2 (RRF, 4 src, k=10)",  per_gene_d2),
-            ("E  (RRF, 5 src, k=60)",  per_gene_e),
-            ("E2 (RRF, 5 src, k=10)",  per_gene_e2),
-            ("F  (LambdaMART)",       per_gene_f),
+            ("D  (RRF, 4 src, k=60)",       per_gene_d),
+            ("D2 (RRF, 4 src, k=10)",       per_gene_d2),
+            ("E  (RRF, 5 src +pathway)",    per_gene_e),
+            ("E2 (RRF, 5 src +pathway k10)", per_gene_e2),
+            ("G  (RRF, 5 src +mutation)",   per_gene_g),
+            ("H  (RRF, 6 src path+mut)",    per_gene_h),
+            ("F  (LambdaMART)",            per_gene_f),
         ]:
             genes, rrs_alt, rrs_a = _aligned_rrs(per_gene, per_gene_a)
             diff, p_val, (ci_lo, ci_hi) = paired_bootstrap_test(rrs_alt, rrs_a)
@@ -244,11 +259,13 @@ def run_comparison():
     print("\n" + "=" * 60)
     print("RANKING METHOD COMPARISON SUMMARY")
     print("=" * 60)
-    print(f"  Config A (weighted-sum, no pathway, LOO-CV):   {mrr_a_display}")
-    print(f"  Config D  (RRF, 4 sources, k=60):              {mrr_d:.4f}")
+    print(f"  Config A (weighted-sum, no pathway, LOO-CV):    {mrr_a_display}")
+    print(f"  Config D  (RRF, 4 sources, k=60):               {mrr_d:.4f}")
     print(f"  Config D2 (RRF, 4 sources, k=10):               {mrr_d2:.4f}")
-    print(f"  Config E  (RRF, 5 sources w/ pathway, k=60):   {mrr_e:.4f}")
+    print(f"  Config E  (RRF, 5 sources w/ pathway, k=60):    {mrr_e:.4f}")
     print(f"  Config E2 (RRF, 5 sources w/ pathway, k=10):    {mrr_e2:.4f}")
+    print(f"  Config G  (RRF, 5 sources w/ mutation, k=60):   {mrr_g:.4f}")
+    print(f"  Config H  (RRF, 6 sources pathway+mutation):    {mrr_h:.4f}")
     print(f"  Config F  (LambdaMART, LOO-CV):                 {mrr_f:.4f}")
     print()
     print("  NOTE: Configs D/D2/E/E2 (RRF) have no fitted parameters — k is")
