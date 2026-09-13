@@ -69,6 +69,20 @@ def ingest_gene(
     max_cell_lines_per_neighbor: int = 3,
 ) -> None:
     """
+    WARNING: if full pathway ingestion (this function, ingest_gene()) is
+    ever run for genes NOT currently in outputs/pathway_scores.json
+    (currently the 14 CIViC-expansion genes: AKT1, ARID1A, CDH1, CDKN2A,
+    CTNNB1, FGFR1, JAK2, MAP2K1, NF1, NOTCH1, NRAS, SMAD4, SMARCA4, STK11 —
+    these currently have Gene nodes from mutation-edge ingestion only, no
+    MEMBER_OF pathway edges, which is why they're safe today), the
+    precomputed cache MUST be regenerated afterward (`python3 -m
+    models.classical.pathway_scorer precompute`), or those genes will
+    silently fall back to live Neo4j pathway computation costing 230-750+
+    seconds per query. See 2026-09-13's incident where this exact gap
+    (RWR + mutation edges deployed without their precomputed caches)
+    caused a 971-second production request. See also pathway_scorer.py's
+    _load_precomputed_pathway().
+
     Ingest one gene: its own node + expression edges, its KEGG pathways, and
     each pathway's neighbor genes — WITH their own expression edges too.
     (Neighbor genes need expression data of their own, or
@@ -298,6 +312,16 @@ def enrich_all() -> dict:
 
 
 def ingest_all() -> None:
+    # WARNING: this calls ingest_gene() (full pathway ingestion) for every
+    # VALIDATION_SET gene, including any of the 14 CIViC-expansion genes
+    # (AKT1, ARID1A, CDH1, CDKN2A, CTNNB1, FGFR1, JAK2, MAP2K1, NF1, NOTCH1,
+    # NRAS, SMAD4, SMARCA4, STK11) not yet in outputs/pathway_scores.json.
+    # Running this WILL give those genes real MEMBER_OF pathway edges —
+    # after which they are no longer safe (see ingest_gene()'s docstring):
+    # regenerate outputs/pathway_scores.json immediately afterward, or
+    # they'll silently fall back to a 230-750+ second live Neo4j pathway
+    # computation per query. See 2026-09-13's 971-second production
+    # incident, caused by this exact class of gap.
     genes = sorted(VALIDATION_SET.keys())
     print(f"Ingesting {len(genes)} genes into Neo4j...")
 

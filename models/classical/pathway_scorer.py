@@ -36,6 +36,15 @@ from models.graph.neo4j_client import run_query
 # file's current logic (e.g. the existing file was built under the old
 # 20-neighbor cap, before it was raised to 50 below; regenerate it to pick
 # up the wider neighbor set).
+#
+# WARNING: if full pathway ingestion (ingest_gene(), in
+# models/graph/ingest.py) is ever run for genes NOT currently in
+# outputs/pathway_scores.json (currently the 14 CIViC-expansion genes:
+# AKT1, ARID1A, CDH1, CDKN2A, CTNNB1, FGFR1, JAK2, MAP2K1, NF1, NOTCH1,
+# NRAS, SMAD4, SMARCA4, STK11), the precomputed cache MUST be regenerated
+# afterward, or those genes will silently fall back to live Neo4j pathway
+# computation costing 230-750+ seconds per query. See 2026-09-13's
+# incident where this exact gap caused a 971-second production request.
 PATHWAY_SCORES_FILE = OUTPUTS_DIR / "pathway_scores.json"
 _PRECOMPUTED_PATHWAY: dict | None = None
 
