@@ -289,6 +289,7 @@ def find_alternatives(
     top_k: int = 3,
     disease_filter: str | None = None,
     lineage_filter: str | None = None,
+    full_scores_df: pd.DataFrame | None = None,
 ) -> dict[str, list[dict]]:
     """
     Find the top_k most similar alternative cell lines for each recommended line.
@@ -298,18 +299,37 @@ def find_alternatives(
     cross-disease alternatives when fewer than top_k same-context lines exist,
     marking fallback entries with a 'note' field.
 
-    Returns {cellosaurus_id: [{cellosaurus_id, official_name, similarity_score,
-                               shared_data_types, similarity_reason, note,
-                               citations}, ...]}
+    full_scores_df: optional pre-computed, full-universe (top_n=None), NO
+        disease/lineage filter, NO exclude_genes scored DataFrame — the
+        SAME thing this function used to recompute from scratch internally
+        via rank(gene, top_n=None) below. When the caller already has this
+        (e.g. api/main.py's /recommend/classical already runs exactly that
+        rank() call before calling find_alternatives), passing it here
+        skips a second, fully redundant ~12s re-scoring pass over every
+        cell line. Only pass it when it is provably identical to what the
+        internal recompute would have produced — i.e. the caller's own
+        rank() call used no disease_filter, no lineage_filter, and no
+        exclude_genes (weights/use_learned_weights don't matter: they only
+        affect final_score, never the rna/protein/quality/context/hpa/
+        depmap/geo columns build_feature_matrix reads). If disease_filter
+        or lineage_filter was used, the caller's DataFrame is filtered to
+        only matching rows and rescoped to that context — reusing it here
+        would silently change context_score (and therefore similarity
+        results) versus the old unfiltered-recompute behaviour, so any
+        caller in that situation must leave this None and take the
+        internal-recompute path below instead.
     """
-    from models.classical.ranker import rank as _rank_full
     from config import CELL_LINE_LOOKUP
 
     use_ctx = bool(disease_filter or lineage_filter)
 
-    # Full expression scores for ALL cell lines (for the feature matrix)
-    print(f"  [similarity] Scoring {gene} across all cell lines...")
-    full_scores = _rank_full(gene, top_n=None)
+    if full_scores_df is not None:
+        full_scores = full_scores_df
+    else:
+        # Full expression scores for ALL cell lines (for the feature matrix)
+        from models.classical.ranker import rank as _rank_full
+        print(f"  [similarity] Scoring {gene} across all cell lines...")
+        full_scores = _rank_full(gene, top_n=None)
 
     master_df = pd.read_parquet(master_merged_path)
 

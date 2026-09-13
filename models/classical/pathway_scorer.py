@@ -1,9 +1,11 @@
+import json
 import sys
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import OUTPUTS_DIR
 from models.classical.scorer import classify_gene, load_mappings, score_rna_expression
 from models.graph.neo4j_client import run_query
 
@@ -22,6 +24,33 @@ from models.graph.neo4j_client import run_query
 # pathway_activity_score = 0.0 for every cell line — safe (never breaks
 # ranking), but the 10% final_score weight is a no-op outside that set.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Precomputed, same pattern as outputs/production_weights.json /
+# outputs/rwr_scores.json — a cold call to score_pathway_activity() was
+# observed taking up to 230-750s for one gene, dominated by Neo4j
+# round-trips + up to 50 sequential per-neighbor-gene expression lookups.
+# Regenerate via `python3 -m models.classical.pathway_scorer precompute`
+# whenever VALIDATION_SET changes, the graph is re-ingested, or this
+# module's neighbor-cap / scoring logic changes — a cached entry reflects
+# whatever logic was in effect when it was written, not necessarily this
+# file's current logic (e.g. the existing file was built under the old
+# 20-neighbor cap, before it was raised to 50 below; regenerate it to pick
+# up the wider neighbor set).
+PATHWAY_SCORES_FILE = OUTPUTS_DIR / "pathway_scores.json"
+_PRECOMPUTED_PATHWAY: dict | None = None
+
+
+def _load_precomputed_pathway() -> dict:
+    global _PRECOMPUTED_PATHWAY
+    if _PRECOMPUTED_PATHWAY is not None:
+        return _PRECOMPUTED_PATHWAY
+    if PATHWAY_SCORES_FILE.exists():
+        with open(PATHWAY_SCORES_FILE, encoding="utf-8") as f:
+            _PRECOMPUTED_PATHWAY = json.load(f)
+    else:
+        _PRECOMPUTED_PATHWAY = {}
+    return _PRECOMPUTED_PATHWAY
+
 
 _PATHWAY_SCORE_CACHE: dict = {}
 
@@ -55,6 +84,25 @@ def score_pathway_activity(
     """
     if gene in _PATHWAY_SCORE_CACHE:
         return _PATHWAY_SCORE_CACHE[gene]
+
+    precomputed = _load_precomputed_pathway()
+    if gene in precomputed:
+        rows = [
+            {"cellosaurus_id": cvcl, **fields}
+            for cvcl, fields in precomputed[gene].items()
+        ]
+        result = pd.DataFrame(rows) if rows else pd.DataFrame({
+            "cellosaurus_id":          pd.Series(dtype="object"),
+            "pathway_activity_score":  pd.Series(dtype="float64"),
+            "pathway_genes_expressed": pd.Series(dtype="int64"),
+            "pathway_genes_total":     pd.Series(dtype="int64"),
+        })
+        _PATHWAY_SCORE_CACHE[gene] = result
+        return result
+
+    print(f"[pathway_scorer] WARNING: {gene} not in {PATHWAY_SCORES_FILE} — "
+          f"computing live (this is the ~230-750s-class cold-start cost; "
+          f"regenerate the precomputed file to include this gene).")
 
     # Step 1: Get pathway neighbor genes from Neo4j.
     # Ingestion stores (Pathway)-[:CONTAINS]->(Gene) — the arrow points
@@ -131,9 +179,40 @@ def score_pathway_activity(
     return result
 
 
+def precompute_pathway_scores(genes: list[str], verbose: bool = True) -> dict:
+    """Standalone entry point — run once offline (`python3 -m
+    models.classical.pathway_scorer precompute`) to regenerate
+    PATHWAY_SCORES_FILE, e.g. after VALIDATION_SET changes, a
+    re-ingestion, or a neighbor-cap / scoring-logic change."""
+    out: dict = {}
+    for i, gene in enumerate(genes, 1):
+        if verbose:
+            print(f"  [{i}/{len(genes)}] {gene}...")
+        df = score_pathway_activity(gene)
+        out[gene] = {
+            row["cellosaurus_id"]: {
+                "pathway_activity_score": float(row["pathway_activity_score"]),
+                "pathway_genes_expressed": int(row["pathway_genes_expressed"]),
+                "pathway_genes_total": int(row["pathway_genes_total"]),
+            }
+            for _, row in df.iterrows()
+        }
+    return out
+
+
 if __name__ == "__main__":
-    print("Pathway activity self-test (EGFR)...")
-    df = score_pathway_activity("EGFR")
-    print(f"{len(df)} cell lines scored")
-    if len(df) > 0:
-        print(df.sort_values("pathway_activity_score", ascending=False).head(10).to_string(index=False))
+    if len(sys.argv) > 1 and sys.argv[1] == "precompute":
+        from models.classical.weights_learned import VALIDATION_SET
+        genes = list(VALIDATION_SET.keys())
+        print(f"Precomputing pathway_activity_score for {len(genes)} genes...")
+        scores = precompute_pathway_scores(genes)
+        PATHWAY_SCORES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(PATHWAY_SCORES_FILE, "w", encoding="utf-8") as f:
+            json.dump(scores, f)
+        print(f"Wrote {PATHWAY_SCORES_FILE} ({sum(len(v) for v in scores.values())} gene-cellline entries)")
+    else:
+        print("Pathway activity self-test (EGFR)...")
+        df = score_pathway_activity("EGFR")
+        print(f"{len(df)} cell lines scored")
+        if len(df) > 0:
+            print(df.sort_values("pathway_activity_score", ascending=False).head(10).to_string(index=False))

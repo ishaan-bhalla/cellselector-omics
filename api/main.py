@@ -24,7 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CELL_LINE_LOOKUP, MASTER_MERGED, OUTPUTS_DIR, PARQUET_DIR
 from api.models import AgenticRequest, ClassicalRequest
 from models.agentic.growth_properties import get_growth_properties
+from models.classical.copy_number_scorer import (
+    AMPLIFICATION_DRIVEN_GENES,
+    apply_amplification_copy_number_weight,
+)
 from models.classical.ranker import FIXED_WEIGHTS, rank
+from models.classical.rwr_scorer import apply_rwr_weight
 from models.classical.scorer import classify_gene, get_gene_role
 from models.classical.similarity import DATASET_CITATIONS, find_alternatives
 from models.graph.queries import (
@@ -316,6 +321,7 @@ def _build_classical_result(
         "pathway_genes_total":     int(row.get("pathway_genes_total") or 0),
         "mutation_impact_score":   round(_safe_float(row.get("mutation_impact_score")), 4),
         "mutation_detail":         str(row.get("mutation_detail") or ""),
+        "rwr_score":          round(_safe_float(row.get("rwr_score")), 4),
         "n_sources":          int(row.get("n_sources") or 0),
         "hpa_evidence":       row.get("hpa_evidence"),
         "depmap_evidence":    row.get("depmap_evidence"),
@@ -369,6 +375,23 @@ async def recommend_classical(body: ClassicalRequest):
     else:
         weights = FIXED_WEIGHTS
 
+    # Mirror rank()'s internal weight augmentation (copy_number / rwr) here
+    # so weights_used in the response reflects what ACTUALLY produced
+    # final_score. rank() applies these same two steps to its own local
+    # `weights` binding and never returns the augmented dict (it returns a
+    # DataFrame), so without this, weights_used would silently omit
+    # copy_number/rwr even though they're in effect — see ranker.rank()'s
+    # AMPLIFICATION_DRIVEN_GENES / "rwr" not in weights block, whose exact
+    # conditions and order this replicates. Both helpers return a NEW dict
+    # (rescale-by-(1-w), never mutate their input), so this is safe to run
+    # independently on the same `weights` value passed into rank() below
+    # without risk of diverging from what rank() itself computes.
+    gene_class = classify_gene(body.gene)
+    if body.gene in AMPLIFICATION_DRIVEN_GENES and "copy_number" not in weights:
+        weights = apply_amplification_copy_number_weight(weights)
+    if "rwr" not in weights:
+        weights = apply_rwr_weight(weights, gene_class)
+
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(
         rank, body.gene, body.disease_filter, body.lineage_filter, None, weights, body.use_learned_weights
@@ -388,11 +411,22 @@ async def recommend_classical(body: ClassicalRequest):
 
     top_results = all_ranked.head(body.top_n)
 
+    # all_ranked is already the exact full-universe (top_n=None), no-filter*
+    # scored DataFrame find_alternatives would otherwise recompute from
+    # scratch internally — reuse it instead of paying for that a second
+    # time. *Only safe when this request itself used no disease/lineage
+    # filter and no exclude_genes: those change all_ranked's context_score
+    # / row set versus what the internal recompute (which never took
+    # filters) would have produced — see find_alternatives' docstring.
+    # Falls back to the old recompute-from-scratch path otherwise.
+    reuse_full_scores = not (body.disease_filter or body.lineage_filter or body.exclude_genes)
+
     try:
         alts_map = await asyncio.to_thread(
             find_alternatives,
             body.gene, top_results, MASTER_MERGED, 3,
             body.disease_filter, body.lineage_filter,
+            all_ranked if reuse_full_scores else None,
         )
     except Exception as exc:
         print(f"[warn] similarity: {exc}")
