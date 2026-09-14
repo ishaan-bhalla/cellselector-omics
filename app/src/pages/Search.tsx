@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import ResultCard from '../components/ResultCard'
 import SlideOver from '../components/SlideOver'
@@ -15,6 +15,9 @@ const LOADING_LINES = [
 
 export default function Search() {
   const [gene, setGene] = useState('')
+  // Per-gene stats (found/sources/cell-line count) for the gene actually
+  // SELECTED from the dropdown — no longer fetched per keystroke, so
+  // there's no async request in flight during typing to race against.
   const [geneInfo, setGeneInfo] = useState<any>(null)
   const [geneLoading, setGeneLoading] = useState(false)
   const [diseaseFilter, setDiseaseFilter] = useState('')
@@ -27,16 +30,52 @@ export default function Search() {
   const [loadLine, setLoadLine] = useState(0)
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // In-flight autocomplete (/genes/search) request, so it can be cancelled
-  // either by a newer keystroke's request (standard debounce-cancellation)
-  // or by the main search firing — see the timing investigation: this
-  // traffic was found competing with the main classical+pathway calls for
-  // the same VM's limited CPU when a search was submitted right after
-  // typing.
-  const autocompleteAbortRef = useRef<AbortController | null>(null)
+  // Full gene list, fetched once on mount — see the useEffect below.
+  // Client-side filtering of this replaces the old per-keystroke
+  // /genes/search autocomplete entirely (eliminates both the backend load
+  // and the out-of-order-response race condition class debugged tonight,
+  // structurally — there's no per-keystroke fetch left to race).
+  const [allGenes, setAllGenes] = useState<string[]>([])
+  const [showDropdown, setShowDropdown] = useState(false)
+  const geneInputRef = useRef<HTMLDivElement>(null)
+  // Tracks which gene the in-flight one-time stats fetch (fired on
+  // dropdown selection, see selectGene) is actually FOR — a minimal,
+  // ref-based guard (not the AbortController machinery removed from the
+  // old per-keystroke path) so that if a user selects a second gene
+  // before the first stats fetch resolves, the stale response can't
+  // silently overwrite the newer one. Deliberately kept minimal: nothing
+  // to cancel, just "is this response still the one we care about".
+  const selectedGeneRef = useRef('')
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    api.getAllGenes()
+      .then(d => setAllGenes(d.genes ?? []))
+      .catch(() => setAllGenes([]))
+  }, [])
+
+  const filteredSuggestions = useMemo(() => {
+    const q = gene.trim().toUpperCase()
+    if (!q) return []
+    return allGenes.filter(g => g.startsWith(q)).slice(0, 10)
+  }, [gene, allGenes])
+
+  const selectGene = async (g: string) => {
+    setGene(g)
+    setShowDropdown(false)
+    selectedGeneRef.current = g
+    setGeneInfo(null)
+    setGeneLoading(true)
+    try {
+      const r = await api.searchGene(g)
+      if (selectedGeneRef.current === g) setGeneInfo(r)
+    } catch {
+      if (selectedGeneRef.current === g) setGeneInfo(null)
+    } finally {
+      if (selectedGeneRef.current === g) setGeneLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (!exportOpen) return
@@ -50,32 +89,15 @@ export default function Search() {
   }, [exportOpen])
 
   useEffect(() => {
-    if (!gene.trim()) { setGeneInfo(null); return }
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      // Cancel any still-in-flight PREVIOUS autocomplete request before
-      // starting this one — under normal typing the debounce timer alone
-      // already prevents overlap, but a slow/backed-up response from an
-      // earlier keystroke can still be in flight when a later one's timer
-      // fires (the exact piling-up scenario from the timing investigation).
-      autocompleteAbortRef.current?.abort()
-      const controller = new AbortController()
-      autocompleteAbortRef.current = controller
-      setGeneLoading(true)
-      try {
-        const r = await api.searchGene(gene.trim().toUpperCase(), controller.signal)
-        setGeneInfo(r)
-      } catch (err: any) {
-        if (err?.name !== 'AbortError') setGeneInfo(null)
-      } finally {
-        // Guard against a superseded/aborted request's own finally running
-        // after a newer one has already taken over — without this, an
-        // aborted request could flip geneLoading back to false while the
-        // request that superseded it is still genuinely in flight.
-        if (autocompleteAbortRef.current === controller) setGeneLoading(false)
+    if (!showDropdown) return
+    const handler = (e: MouseEvent) => {
+      if (geneInputRef.current && !geneInputRef.current.contains(e.target as Node)) {
+        setShowDropdown(false)
       }
-    }, 300)
-  }, [gene])
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showDropdown])
 
   useEffect(() => {
     if (!loading) { setLoadLine(0); return }
@@ -86,15 +108,7 @@ export default function Search() {
   const handleSearch = async () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
-
-    // Cancel any pending/in-flight autocomplete work before starting the
-    // main search — both the not-yet-fired debounce timer and an
-    // already-in-flight fetch (see the matching cancellation logic in the
-    // debounced useEffect above). Prevents autocomplete traffic from
-    // competing with the main classical+pathway calls for the VM's CPU.
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    autocompleteAbortRef.current?.abort()
-    setGeneLoading(false)
+    setShowDropdown(false)
 
     const excludeList = excludeGenes
       ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -190,8 +204,11 @@ export default function Search() {
   // since learned weights (the default) don't match any fixed percentage.
   const w = allResults?.weights_used
 
-  const geneFound = geneInfo?.found === true
-  const sourcesFound = geneFound
+  // geneInfo is now only ever populated by selectGene() for a gene already
+  // confirmed present in allGenes — a "not found" state is structurally
+  // unreachable through the dropdown, so there's no error branch to render
+  // here any more (see STEP 3 of the client-side-autocomplete task).
+  const sourcesFound = geneInfo?.sources
     ? Object.entries(geneInfo.sources as Record<string, boolean>)
         .filter(([, v]) => v).map(([k]) => k).join(' · ')
     : ''
@@ -206,17 +223,27 @@ export default function Search() {
           <p className="text-[#6E6E73] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
           <h1 className="text-[#1D1D1F] text-3xl font-bold mb-8">Search Tool</h1>
 
-          {/* Gene input */}
-          <div className="mb-5">
+          {/* Gene input — client-side-filtered dropdown, see allGenes/
+              filteredSuggestions above. Replaces the old per-keystroke
+              /genes/search autocomplete entirely: zero network requests
+              while typing, suggestions filtered instantly from the
+              already-loaded full gene list. */}
+          <div className="mb-5" ref={geneInputRef}>
             <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">Gene Name</label>
             <div className="relative">
               <input
                 type="text"
                 value={gene}
-                onChange={e => setGene(e.target.value)}
+                onChange={e => {
+                  setGene(e.target.value)
+                  setGeneInfo(null)
+                  setShowDropdown(true)
+                }}
+                onFocus={() => gene.trim() && setShowDropdown(true)}
                 onKeyDown={e => e.key === 'Enter' && handleSearch()}
                 placeholder="e.g. EGFR, BRCA1, KIT"
                 autoFocus
+                autoComplete="off"
                 className="w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] font-mono text-lg px-4 py-3 rounded-xl focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]"
                 style={{ boxShadow: gene ? '0 0 0 3px rgba(29,29,31,0.06)' : undefined }}
               />
@@ -225,12 +252,24 @@ export default function Search() {
                   <div className="w-4 h-4 border border-[#D2D2D7] border-t-[#1D1D1F] rounded-full animate-spin" />
                 </div>
               )}
+              {showDropdown && filteredSuggestions.length > 0 && (
+                <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-white border border-[#D2D2D7] rounded-xl shadow-lg">
+                  {filteredSuggestions.map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => selectGene(g)}
+                      className="w-full text-left px-4 py-2 font-mono text-sm text-[#1D1D1F] hover:bg-[#F5F5F7] transition-colors"
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {geneInfo && !geneLoading && (
-              <div className={`mt-2 text-xs font-mono ${geneFound ? 'text-[#2D6A4F]' : 'text-[#C62828]'}`}>
-                {geneFound
-                  ? `✓ ${gene.toUpperCase()} — ${sourcesFound} — ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`
-                  : `✗ ${gene.toUpperCase()} not found in any omics source`}
+              <div className="mt-2 text-xs font-mono text-[#2D6A4F]">
+                {`✓ ${geneInfo.gene ?? gene.toUpperCase()} — ${sourcesFound} — ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
               </div>
             )}
           </div>

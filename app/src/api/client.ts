@@ -5,8 +5,16 @@ export const api = {
   stats: () =>
     fetch('/stats').then(r => r.json()),
 
-  searchGene: (q: string, signal?: AbortSignal) =>
-    fetch(`/genes/search?q=${encodeURIComponent(q)}`, { signal }).then(r => r.json()),
+  // Only called once, when a gene is SELECTED from the client-side-filtered
+  // dropdown (see Search.tsx) — not per keystroke, so there's nothing to
+  // debounce or cancel/race against here any more.
+  searchGene: (q: string) =>
+    fetch(`/genes/search?q=${encodeURIComponent(q)}`).then(r => r.json()),
+
+  // Full gene list, fetched once on mount to power client-side autocomplete
+  // filtering — see Search.tsx.
+  getAllGenes: () =>
+    fetch('/genes/all').then(r => r.json()),
 
   recommendClassical: (body: {
     gene: string

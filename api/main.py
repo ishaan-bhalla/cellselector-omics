@@ -211,6 +211,27 @@ def health(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. GET /genes/search?q=EGFR
 # ─────────────────────────────────────────────────────────────────────────────
+def _count_cell_lines_with_data(gene: str) -> int:
+    """
+    Lightweight "how many cell lines have ANY expression data for this
+    gene" count — the same all_cvcl = rna ∪ protein union rank() computes
+    internally right at its start, WITHOUT any of the downstream pathway/
+    mutation/RWR/copy-number/context/quality scoring, merging or sorting
+    rank() goes on to do for a full ranked result. Extracted specifically
+    because /genes/search used to call the full rank() pipeline just for
+    this count — measured at ~12-13s per call (see the autocomplete-
+    latency investigation) for a number this needs only a set union for.
+    """
+    from models.classical.scorer import (
+        classify_gene, load_mappings, score_protein_expression, score_rna_expression,
+    )
+    hpa_to_cvcl, ach_to_cvcl, gsm_to_cvcl = load_mappings()
+    gene_class = classify_gene(gene)
+    rna_df     = score_rna_expression(gene, hpa_to_cvcl, gsm_to_cvcl, gene_class=gene_class)
+    protein_df = score_protein_expression(gene, ach_to_cvcl)
+    return len(set(rna_df["cellosaurus_id"]) | set(protein_df["cellosaurus_id"]))
+
+
 @app.get("/genes/search")
 async def search_gene(q: str = Query(..., min_length=1), request: Request = None):
     gene      = q.strip().upper()
@@ -220,8 +241,7 @@ async def search_gene(q: str = Query(..., min_length=1), request: Request = None
 
     total_cl = 0
     if found:
-        full = await asyncio.to_thread(rank, gene, None, None, None)
-        total_cl = len(full)
+        total_cl = await asyncio.to_thread(_count_cell_lines_with_data, gene)
 
     return {
         "gene":                    gene,
@@ -229,6 +249,23 @@ async def search_gene(q: str = Query(..., min_length=1), request: Request = None
         "sources":                 sources,
         "total_cell_lines_with_data": total_cl,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b. GET /genes/all — full gene list, for client-side autocomplete
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/genes/all")
+async def get_all_genes(request: Request):
+    """
+    Return the complete list of gene symbols present in any integrated
+    data source. Powers client-side autocomplete (Search.tsx fetches this
+    ONCE on mount and filters it locally per keystroke) — no per-query
+    computation here at all, just a union + sort of the same in-memory
+    gene_sets /genes/search already reads from app.state.
+    """
+    gene_sets = request.app.state.gene_sets
+    all_genes = sorted(set().union(*gene_sets.values())) if gene_sets else []
+    return {"genes": all_genes, "count": len(all_genes)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -354,17 +391,106 @@ def _build_classical_result(
     }
 
 
+def _build_multi_gene_result(rank_pos: int, row: pd.Series) -> dict:
+    """
+    Result item for a multi-gene combined search (additional_genes
+    non-empty) — a deliberately SMALLER schema than
+    _build_classical_result(), not that function reused with gaps papered
+    over. The single-gene evidence fields (rna_score, hpa_evidence,
+    pathway_activity_score, mutation_detail, ...) each belong to ONE
+    specific gene's scoring; there's no non-arbitrary choice of which
+    gene's value to show on a row that's about several genes at once, so
+    rather than silently pick one (misleading) or repeat all of them per
+    gene (a much bigger schema than asked for), those fields are omitted
+    entirely here. per_gene_percentiles / per_gene_scores (from
+    multi_gene_ranker.rank_multi_gene) already carry the equivalent
+    per-gene detail in an unambiguous, explicitly-keyed form — that's the
+    transparency mechanism for multi-gene, not a repurposed single-gene one.
+    Alternatives (find_alternatives) are likewise not computed here —
+    "similar to this line" is well-defined per-gene, not for a combined
+    multi-gene ranking; out of scope for this pass, not silently dropped.
+    gene_role is similarly gene-specific and left out for the same reason.
+    """
+    cvcl = row["cellosaurus_id"]
+    return {
+        "rank":                rank_pos,
+        "cellosaurus_id":      cvcl,
+        "official_name":       str(row.get("official_name") or cvcl),
+        "combined_score":      round(_safe_float(row.get("combined_score")), 4),
+        "per_gene_percentiles": row.get("per_gene_percentiles"),
+        "per_gene_scores":      row.get("per_gene_scores"),
+        "disease":             str(row.get("disease") or ""),
+        "lineage":             str(row.get("lineage") or ""),
+        "growth_properties":   get_growth_properties(cvcl),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. POST /recommend/classical
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/recommend/classical")
 async def recommend_classical(body: ClassicalRequest):
-    if body.exclude_genes and body.gene.upper() in [g.upper() for g in body.exclude_genes]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot search for {body.gene} and exclude it simultaneously.",
-        )
+    all_query_genes = [body.gene] + list(body.additional_genes)
 
+    if body.exclude_genes:
+        excl_upper = {g.upper() for g in body.exclude_genes}
+        conflicting = [g for g in all_query_genes if g.upper() in excl_upper]
+        if conflicting:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot search for {conflicting} and exclude them simultaneously.",
+            )
+
+    # ── Multi-gene combined search — see models.classical.multi_gene_ranker.
+    # Only taken when additional_genes is non-empty; the branch below this
+    # one is the ORIGINAL single-gene code, completely untouched, so
+    # behavior for existing callers (additional_genes omitted/empty) is
+    # unchanged.
+    if body.additional_genes:
+        from models.classical.multi_gene_ranker import rank_multi_gene
+
+        t0 = time.time()
+        combined = await asyncio.to_thread(
+            rank_multi_gene,
+            all_query_genes, body.disease_filter, body.lineage_filter,
+            body.exclude_genes or None, body.top_n,
+        )
+        if combined is None or len(combined) == 0:
+            raise HTTPException(
+                404,
+                f"No cell lines have data for all of: {', '.join(all_query_genes)}",
+            )
+
+        # Per-gene weights_used — informational only (rank_multi_gene reuses
+        # rank()'s own internal per-gene weight resolution; this mirrors
+        # what each gene's rank() call actually used, same reasoning as the
+        # single-gene path's weights_used mirroring below).
+        weights_used = {g: await _get_learned_weights_for_gene(g) for g in all_query_genes}
+
+        results = [
+            _build_multi_gene_result(i + 1, row)
+            for i, (_, row) in enumerate(combined.iterrows())
+        ]
+        execution_ms = int((time.time() - t0) * 1000)
+        response = {
+            "query":   body.model_dump(),
+            "model":   "classical_multi_gene",
+            "results": results,
+            "weights_used": weights_used,
+            "metadata": {
+                "genes_queried": all_query_genes,
+                "total_candidates_per_gene": combined.attrs.get("total_candidates_per_gene", {}),
+                "n_excluded_missing_data": combined.attrs.get("n_excluded_missing_data", 0),
+                "execution_time_ms": execution_ms,
+            },
+        }
+        response = _sanitize_for_json(response)
+        response["session_id"] = _store_session(response)
+        return response
+
+    # ── Original single-gene path — UNCHANGED below this point. The
+    # exclude_genes-vs-gene conflict check above already covers this case
+    # (all_query_genes == [body.gene] when additional_genes is empty).
     t0 = time.time()
 
     # LOF genes always use the mutation-aware learned weights inside rank()
