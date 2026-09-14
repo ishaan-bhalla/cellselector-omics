@@ -28,6 +28,13 @@ export default function Search() {
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // In-flight autocomplete (/genes/search) request, so it can be cancelled
+  // either by a newer keystroke's request (standard debounce-cancellation)
+  // or by the main search firing — see the timing investigation: this
+  // traffic was found competing with the main classical+pathway calls for
+  // the same VM's limited CPU when a search was submitted right after
+  // typing.
+  const autocompleteAbortRef = useRef<AbortController | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
 
@@ -46,14 +53,26 @@ export default function Search() {
     if (!gene.trim()) { setGeneInfo(null); return }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(async () => {
+      // Cancel any still-in-flight PREVIOUS autocomplete request before
+      // starting this one — under normal typing the debounce timer alone
+      // already prevents overlap, but a slow/backed-up response from an
+      // earlier keystroke can still be in flight when a later one's timer
+      // fires (the exact piling-up scenario from the timing investigation).
+      autocompleteAbortRef.current?.abort()
+      const controller = new AbortController()
+      autocompleteAbortRef.current = controller
       setGeneLoading(true)
       try {
-        const r = await api.searchGene(gene.trim().toUpperCase())
+        const r = await api.searchGene(gene.trim().toUpperCase(), controller.signal)
         setGeneInfo(r)
-      } catch {
-        setGeneInfo(null)
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') setGeneInfo(null)
       } finally {
-        setGeneLoading(false)
+        // Guard against a superseded/aborted request's own finally running
+        // after a newer one has already taken over — without this, an
+        // aborted request could flip geneLoading back to false while the
+        // request that superseded it is still genuinely in flight.
+        if (autocompleteAbortRef.current === controller) setGeneLoading(false)
       }
     }, 300)
   }, [gene])
@@ -67,6 +86,15 @@ export default function Search() {
   const handleSearch = async () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
+
+    // Cancel any pending/in-flight autocomplete work before starting the
+    // main search — both the not-yet-fired debounce timer and an
+    // already-in-flight fetch (see the matching cancellation logic in the
+    // debounced useEffect above). Prevents autocomplete traffic from
+    // competing with the main classical+pathway calls for the VM's CPU.
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    autocompleteAbortRef.current?.abort()
+    setGeneLoading(false)
 
     const excludeList = excludeGenes
       ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -89,7 +117,14 @@ export default function Search() {
           disease_filter: diseaseFilterVal,
           lineage_filter: lineageFilter.trim() || undefined,
           exclude_genes: excludeList.length ? excludeList : undefined,
-          top_n: 50,
+          // Was 50, matching the "Top" dropdown's max option (line ~231)
+          // so it could resize the display client-side with no refetch.
+          // Reduced to 20 (the dropdown's second-highest option) to cut
+          // backend work — see the timing investigation report. Trade-off
+          // accepted deliberately: selecting "Top 50" now shows only the
+          // 20 fetched, a minor label/content mismatch, not a crash — the
+          // dropdown itself was intentionally left at [5, 10, 20, 50].
+          top_n: 20,
         }),
         api.cellLinesViaPathway(g, diseaseFilterVal, 5).catch(() => null),
       ])

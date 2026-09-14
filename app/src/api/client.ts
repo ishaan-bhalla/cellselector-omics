@@ -5,8 +5,8 @@ export const api = {
   stats: () =>
     fetch('/stats').then(r => r.json()),
 
-  searchGene: (q: string) =>
-    fetch(`/genes/search?q=${encodeURIComponent(q)}`).then(r => r.json()),
+  searchGene: (q: string, signal?: AbortSignal) =>
+    fetch(`/genes/search?q=${encodeURIComponent(q)}`, { signal }).then(r => r.json()),
 
   recommendClassical: (body: {
     gene: string
