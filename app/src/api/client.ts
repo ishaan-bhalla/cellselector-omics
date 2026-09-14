@@ -18,6 +18,7 @@ export const api = {
 
   recommendClassical: (body: {
     gene: string
+    additional_genes?: string[]
     disease_filter?: string
     lineage_filter?: string
     exclude_genes?: string[]

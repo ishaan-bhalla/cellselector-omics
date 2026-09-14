@@ -13,6 +13,80 @@ const LOADING_LINES = [
   '> Analysis complete.',
 ]
 
+// Shared gene autocomplete input — used for BOTH the primary gene input and
+// any additional-gene input(s) added via "+ Add another gene" (see Search()
+// below), rather than duplicating the dropdown/filtering logic per input.
+// Fully controlled (value/onChange owned by the caller) so the primary and
+// additional inputs can have different clear-after-select behavior without
+// this component needing to know which one it is.
+function GeneAutocompleteInput({
+  value,
+  onChange,
+  onSelect,
+  allGenes,
+  excludeFromSuggestions = [],
+  placeholder,
+  autoFocus,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onSelect: (g: string) => void
+  allGenes: string[]
+  excludeFromSuggestions?: string[]
+  placeholder?: string
+  autoFocus?: boolean
+}) {
+  const [showDropdown, setShowDropdown] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showDropdown) return
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setShowDropdown(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showDropdown])
+
+  const suggestions = useMemo(() => {
+    const q = value.trim().toUpperCase()
+    if (!q) return []
+    return allGenes
+      .filter(g => g.startsWith(q) && !excludeFromSuggestions.includes(g))
+      .slice(0, 10)
+  }, [value, allGenes, excludeFromSuggestions])
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <input
+        type="text"
+        value={value}
+        onChange={e => { onChange(e.target.value); setShowDropdown(true) }}
+        onFocus={() => value.trim() && setShowDropdown(true)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        className="w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] font-mono text-lg px-4 py-3 rounded-xl focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]"
+        style={{ boxShadow: value ? '0 0 0 3px rgba(29,29,31,0.06)' : undefined }}
+      />
+      {showDropdown && suggestions.length > 0 && (
+        <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-white border border-[#D2D2D7] rounded-xl shadow-lg">
+          {suggestions.map(g => (
+            <button
+              key={g}
+              type="button"
+              onClick={() => { onSelect(g); setShowDropdown(false) }}
+              className="w-full text-left px-4 py-2 font-mono text-sm text-[#1D1D1F] hover:bg-[#F5F5F7] transition-colors"
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Search() {
   const [gene, setGene] = useState('')
   // Per-gene stats (found/sources/cell-line count) for the gene actually
@@ -36,8 +110,6 @@ export default function Search() {
   // and the out-of-order-response race condition class debugged tonight,
   // structurally — there's no per-keystroke fetch left to race).
   const [allGenes, setAllGenes] = useState<string[]>([])
-  const [showDropdown, setShowDropdown] = useState(false)
-  const geneInputRef = useRef<HTMLDivElement>(null)
   // Tracks which gene the in-flight one-time stats fetch (fired on
   // dropdown selection, see selectGene) is actually FOR — a minimal,
   // ref-based guard (not the AbortController machinery removed from the
@@ -46,6 +118,14 @@ export default function Search() {
   // silently overwrite the newer one. Deliberately kept minimal: nothing
   // to cancel, just "is this response still the one we care about".
   const selectedGeneRef = useRef('')
+  // Additional genes for a combined multi-gene search (see handleSearch's
+  // additional_genes wiring) — separate from `gene` (the primary), plus a
+  // draft for whatever's currently being typed in the "add another gene"
+  // box, which clears after each successful add (unlike the primary
+  // input, which keeps showing the selected gene).
+  const [additionalGenes, setAdditionalGenes] = useState<string[]>([])
+  const [additionalGeneDraft, setAdditionalGeneDraft] = useState('')
+  const [showAddGene, setShowAddGene] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
 
@@ -55,15 +135,8 @@ export default function Search() {
       .catch(() => setAllGenes([]))
   }, [])
 
-  const filteredSuggestions = useMemo(() => {
-    const q = gene.trim().toUpperCase()
-    if (!q) return []
-    return allGenes.filter(g => g.startsWith(q)).slice(0, 10)
-  }, [gene, allGenes])
-
   const selectGene = async (g: string) => {
     setGene(g)
-    setShowDropdown(false)
     selectedGeneRef.current = g
     setGeneInfo(null)
     setGeneLoading(true)
@@ -75,6 +148,16 @@ export default function Search() {
     } finally {
       if (selectedGeneRef.current === g) setGeneLoading(false)
     }
+  }
+
+  const addAdditionalGene = (g: string) => {
+    setAdditionalGeneDraft('')
+    if (g === gene || additionalGenes.includes(g)) return
+    setAdditionalGenes(prev => [...prev, g])
+  }
+
+  const removeAdditionalGene = (g: string) => {
+    setAdditionalGenes(prev => prev.filter(x => x !== g))
   }
 
   useEffect(() => {
@@ -89,17 +172,6 @@ export default function Search() {
   }, [exportOpen])
 
   useEffect(() => {
-    if (!showDropdown) return
-    const handler = (e: MouseEvent) => {
-      if (geneInputRef.current && !geneInputRef.current.contains(e.target as Node)) {
-        setShowDropdown(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showDropdown])
-
-  useEffect(() => {
     if (!loading) { setLoadLine(0); return }
     const id = setInterval(() => setLoadLine(l => Math.min(l + 1, LOADING_LINES.length - 1)), 650)
     return () => clearInterval(id)
@@ -108,7 +180,6 @@ export default function Search() {
   const handleSearch = async () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
-    setShowDropdown(false)
 
     const excludeList = excludeGenes
       ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -125,9 +196,18 @@ export default function Search() {
       // search, not on a separate user action. A failure here (e.g. the
       // gene isn't yet ingested into the graph) shouldn't break the main
       // results, so it's caught independently rather than via the outer catch.
+      // Deliberately still primary-gene-only (unaffected by additionalGenes)
+      // — out of scope for this task.
       const [r, pw] = await Promise.all([
         api.recommendClassical({
           gene: g,
+          // additionalGenes is always a real array (possibly empty) — sent
+          // as-is, matching what additional_genes: list[str] =
+          // Field(default_factory=list) on the backend expects. An empty
+          // array here takes the EXACT SAME code path as before this
+          // change (see api/main.py: `if body.additional_genes:` is False
+          // for []), so a search with nothing added is unaffected.
+          additional_genes: additionalGenes,
           disease_filter: diseaseFilterVal,
           lineage_filter: lineageFilter.trim() || undefined,
           exclude_genes: excludeList.length ? excludeList : undefined,
@@ -202,7 +282,11 @@ export default function Search() {
   // Actual weights the API used for this query (learned or fixed) — the
   // scoring panel reads real numbers from here rather than hardcoding them,
   // since learned weights (the default) don't match any fixed percentage.
+  // For a multi-gene query, weights_used is {gene: {...weights}, ...} —
+  // a different shape the single-gene panel below doesn't understand, so
+  // it's gated off entirely for multi-gene rather than shown garbled.
   const w = allResults?.weights_used
+  const isMultiGene = (allResults?.query?.additional_genes?.length ?? 0) > 0
 
   // geneInfo is now only ever populated by selectGene() for a gene already
   // confirmed present in allGenes — a "not found" state is structurally
@@ -223,47 +307,25 @@ export default function Search() {
           <p className="text-[#6E6E73] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
           <h1 className="text-[#1D1D1F] text-3xl font-bold mb-8">Search Tool</h1>
 
-          {/* Gene input — client-side-filtered dropdown, see allGenes/
-              filteredSuggestions above. Replaces the old per-keystroke
-              /genes/search autocomplete entirely: zero network requests
-              while typing, suggestions filtered instantly from the
-              already-loaded full gene list. */}
-          <div className="mb-5" ref={geneInputRef}>
+          {/* Gene input — client-side-filtered dropdown via the shared
+              GeneAutocompleteInput (also used below for additional genes).
+              Zero network requests while typing; suggestions filtered
+              instantly from the already-loaded full gene list. */}
+          <div className="mb-5">
             <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">Gene Name</label>
             <div className="relative">
-              <input
-                type="text"
+              <GeneAutocompleteInput
                 value={gene}
-                onChange={e => {
-                  setGene(e.target.value)
-                  setGeneInfo(null)
-                  setShowDropdown(true)
-                }}
-                onFocus={() => gene.trim() && setShowDropdown(true)}
-                onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                onChange={v => { setGene(v); setGeneInfo(null) }}
+                onSelect={selectGene}
+                allGenes={allGenes}
+                excludeFromSuggestions={additionalGenes}
                 placeholder="e.g. EGFR, BRCA1, KIT"
                 autoFocus
-                autoComplete="off"
-                className="w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] font-mono text-lg px-4 py-3 rounded-xl focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]"
-                style={{ boxShadow: gene ? '0 0 0 3px rgba(29,29,31,0.06)' : undefined }}
               />
               {geneLoading && (
                 <div className="absolute right-3.5 top-4">
                   <div className="w-4 h-4 border border-[#D2D2D7] border-t-[#1D1D1F] rounded-full animate-spin" />
-                </div>
-              )}
-              {showDropdown && filteredSuggestions.length > 0 && (
-                <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-white border border-[#D2D2D7] rounded-xl shadow-lg">
-                  {filteredSuggestions.map(g => (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => selectGene(g)}
-                      className="w-full text-left px-4 py-2 font-mono text-sm text-[#1D1D1F] hover:bg-[#F5F5F7] transition-colors"
-                    >
-                      {g}
-                    </button>
-                  ))}
                 </div>
               )}
             </div>
@@ -271,6 +333,51 @@ export default function Search() {
               <div className="mt-2 text-xs font-mono text-[#2D6A4F]">
                 {`✓ ${geneInfo.gene ?? gene.toUpperCase()} — ${sourcesFound} — ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
               </div>
+            )}
+
+            {/* Additional genes — combined multi-gene search. Removable
+                chips match the "source chips" pill pattern already used in
+                ResultCard, not a new visual style. */}
+            {additionalGenes.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {additionalGenes.map(g => (
+                  <span
+                    key={g}
+                    className="inline-flex items-center gap-1.5 text-xs font-mono bg-[#F5F5F7] text-[#1D1D1F] px-2.5 py-1 rounded-full"
+                  >
+                    {g}
+                    <button
+                      type="button"
+                      onClick={() => removeAdditionalGene(g)}
+                      aria-label={`Remove ${g}`}
+                      className="text-[#6E6E73] hover:text-[#C62828] transition-colors leading-none"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {showAddGene ? (
+              <div className="relative mt-2 max-w-xs">
+                <GeneAutocompleteInput
+                  value={additionalGeneDraft}
+                  onChange={setAdditionalGeneDraft}
+                  onSelect={addAdditionalGene}
+                  allGenes={allGenes}
+                  excludeFromSuggestions={[gene, ...additionalGenes]}
+                  placeholder="Add another gene…"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowAddGene(true)}
+                className="mt-2 text-xs text-[#6E6E73] hover:text-[#1D1D1F] transition-colors"
+              >
+                + Add another gene
+              </button>
             )}
           </div>
 
@@ -341,57 +448,67 @@ export default function Search() {
         {/* Results */}
         {allResults && !loading && (
           <>
-            {/* Scoring transparency panel */}
-            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
-              <div className="font-semibold text-black mb-2">
-                How Fit Score is computed
+            {/* Scoring transparency panel — single-gene only. For a
+                multi-gene query, weights_used is {gene: {...weights}}, a
+                shape this panel's text doesn't describe (it explains ONE
+                gene's five-dimension formula), so it's hidden rather than
+                shown wrong. */}
+            {!isMultiGene && (
+              <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
+                <div className="font-semibold text-black mb-2">
+                  How Fit Score is computed
+                </div>
+                <p>
+                  Each cell line is scored across five weighted
+                  dimensions: <strong>RNA Expression</strong>{' '}
+                  ({w?.rna ? (w.rna * 100).toFixed(0) : '?'}%)
+                  measures transcript abundance across HPA and
+                  DepMap; <strong>Protein</strong>{' '}
+                  ({w?.protein ? (w.protein * 100).toFixed(0) : '?'}%) measures
+                  protein abundance from CCLE proteomics;{' '}
+                  <strong>Data Quality</strong>{' '}
+                  ({w?.quality ? (w.quality * 100).toFixed(0) : '?'}%) reflects
+                  cross-source agreement and data completeness;{' '}
+                  <strong>Context</strong>{' '}
+                  ({w?.context ? (w.context * 100).toFixed(0) : '?'}%) rewards disease
+                  and tissue match to your search filter;{' '}
+                  <strong>Pathway Activity</strong>{' '}
+                  ({w?.pathway ? (w.pathway * 100).toFixed(0) : '10'}%) measures
+                  how many genes sharing a KEGG pathway with your
+                  target are also expressed in this cell line. GEO
+                  expression acts as a confirmatory bonus
+                  (up to +10%). Weights are optimised by maximising
+                  Mean Reciprocal Rank against 25 validated
+                  gene-cell-line associations from the literature.
+                </p>
+                <p className="mt-2">
+                  Fit Score combines five evidence dimensions with
+                  weights that are automatically optimized per gene
+                  class using Mean Reciprocal Rank against 25
+                  validated gene-cell-line associations. The system
+                  discovered that pathway activity improves ranking
+                  accuracy for hormone receptors and broadly-expressed
+                  genes, but can introduce noise for receptor tyrosine
+                  kinases where direct expression is already the
+                  decisive signal — so pathway weight is tuned
+                  independently per gene class. The percentages above
+                  reflect the weights actually applied to{' '}
+                  {allResults.query?.gene ?? gene}, a{' '}
+                  {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
+                  gene.
+                </p>
               </div>
-              <p>
-                Each cell line is scored across five weighted
-                dimensions: <strong>RNA Expression</strong>{' '}
-                ({w?.rna ? (w.rna * 100).toFixed(0) : '?'}%)
-                measures transcript abundance across HPA and
-                DepMap; <strong>Protein</strong>{' '}
-                ({w?.protein ? (w.protein * 100).toFixed(0) : '?'}%) measures
-                protein abundance from CCLE proteomics;{' '}
-                <strong>Data Quality</strong>{' '}
-                ({w?.quality ? (w.quality * 100).toFixed(0) : '?'}%) reflects
-                cross-source agreement and data completeness;{' '}
-                <strong>Context</strong>{' '}
-                ({w?.context ? (w.context * 100).toFixed(0) : '?'}%) rewards disease
-                and tissue match to your search filter;{' '}
-                <strong>Pathway Activity</strong>{' '}
-                ({w?.pathway ? (w.pathway * 100).toFixed(0) : '10'}%) measures
-                how many genes sharing a KEGG pathway with your
-                target are also expressed in this cell line. GEO
-                expression acts as a confirmatory bonus
-                (up to +10%). Weights are optimised by maximising
-                Mean Reciprocal Rank against 25 validated
-                gene-cell-line associations from the literature.
-              </p>
-              <p className="mt-2">
-                Fit Score combines five evidence dimensions with
-                weights that are automatically optimized per gene
-                class using Mean Reciprocal Rank against 25
-                validated gene-cell-line associations. The system
-                discovered that pathway activity improves ranking
-                accuracy for hormone receptors and broadly-expressed
-                genes, but can introduce noise for receptor tyrosine
-                kinases where direct expression is already the
-                decisive signal — so pathway weight is tuned
-                independently per gene class. The percentages above
-                reflect the weights actually applied to{' '}
-                {allResults.query?.gene ?? gene}, a{' '}
-                {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
-                gene.
-              </p>
-            </div>
+            )}
 
             <div className="flex items-center justify-between mb-6">
               <div>
                 <div className="text-[#1D1D1F] font-bold text-lg">
                   Showing {displayedResults?.results.length} of {allResults.results?.length} loaded for{' '}
-                  <span className="font-mono">{allResults.query?.gene}</span>
+                  <span className="font-mono">
+                    {isMultiGene
+                      ? [allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])].join(' + ')
+                      : allResults.query?.gene}
+                  </span>
                   {allResults.query?.disease_filter && (
                     <span className="text-[#6E6E73] text-sm font-normal ml-2">
                       in {allResults.query.disease_filter}
@@ -399,7 +516,9 @@ export default function Search() {
                   )}
                 </div>
                 <div className="text-[#6E6E73] text-xs mt-0.5 font-mono">
-                  {allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored
+                  {isMultiGene
+                    ? `${allResults.metadata?.n_excluded_missing_data ?? 0} lines excluded (missing data for ≥1 gene)`
+                    : `${allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored`}
                   {allResults.metadata?.execution_time_ms && ` · ${allResults.metadata.execution_time_ms}ms`}
                 </div>
               </div>

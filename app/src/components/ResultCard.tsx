@@ -79,8 +79,16 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState(false)
 
-  const isTop    = result.rank === 1
-  const scorePct = Math.round((result.final_score ?? 0) * 100)
+  const isTop = result.rank === 1
+  // Multi-gene combined-search results (see multi_gene_ranker.rank_multi_gene
+  // / api/main.py's _build_multi_gene_result) use combined_score in place of
+  // final_score, and omit essentially every other single-gene evidence
+  // field (rna_score, hpa_evidence, pathway_activity_score, ...) — detected
+  // here via per_gene_percentiles' presence, the one field unique to that
+  // shape, so the sections below that don't apply to it stay hidden rather
+  // than rendering misleading zeros.
+  const isMultiGene = result.per_gene_percentiles != null
+  const scorePct = Math.round(((isMultiGene ? result.combined_score : result.final_score) ?? 0) * 100)
 
   const sources = [
     (result.hpa_score ?? 0) > 0 && 'HPA RNA',
@@ -135,34 +143,52 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         </div>
         <div className="text-right ml-4 flex-shrink-0">
           <div className="text-[#1D1D1F] font-mono text-2xl font-bold leading-tight">{scorePct}%</div>
-          <div className="text-[#6E6E73] text-xs">Fit Score</div>
+          <div className="text-[#6E6E73] text-xs">{isMultiGene ? 'Combined Score' : 'Fit Score'}</div>
         </div>
       </div>
 
-      {/* Badges */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-3">
-        {result.gene_class && (
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${classStyle}`}>
-            {(result.gene_class as string).replace(/_/g, ' ')}
-          </span>
-        )}
-        {result.gene_role && (
-          <span className="text-xs text-[#6E6E73] italic">
-            {result.gene_role}
-          </span>
-        )}
-        {[
-          { label: 'RNA',     val: result.rna_score },
-          { label: 'PROTEIN', val: result.protein_score },
-          { label: 'QUALITY', val: result.quality_score },
-          { label: 'CONTEXT', val: result.context_score },
-          { label: 'PATHWAY', val: result.pathway_activity_score },
-        ].map(({ label, val }) => (
-          <span key={label} className="bg-[#F5F5F7] text-[#6E6E73] text-xs px-2 py-0.5 rounded font-mono">
-            {(val ?? 0).toFixed(2)} {label}
-          </span>
-        ))}
-      </div>
+      {/* Per-gene percentile breakdown — multi-gene only. The transparency
+          mechanism for a combined search, in place of the single-gene
+          RNA/PROTEIN/QUALITY/CONTEXT/PATHWAY badges below (which don't
+          apply — those fields don't exist on a multi-gene result). */}
+      {isMultiGene && (
+        <div className="text-xs text-[#6E6E73] font-mono mb-3">
+          {Object.entries(result.per_gene_percentiles as Record<string, number>)
+            .map(([g, pct]) => `${g}: ${Math.round(pct * 100)}%ile`)
+            .join(' · ')}
+        </div>
+      )}
+
+      {/* Badges — single-gene only (RNA/PROTEIN/QUALITY/CONTEXT/PATHWAY
+          scores don't exist on a multi-gene result). gene_class/gene_role
+          are naturally absent too and already no-op via the `&&` guards
+          below, but the score badges use `?? 0` and would otherwise show
+          a misleading "0.00" for every dimension. */}
+      {!isMultiGene && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {result.gene_class && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${classStyle}`}>
+              {(result.gene_class as string).replace(/_/g, ' ')}
+            </span>
+          )}
+          {result.gene_role && (
+            <span className="text-xs text-[#6E6E73] italic">
+              {result.gene_role}
+            </span>
+          )}
+          {[
+            { label: 'RNA',     val: result.rna_score },
+            { label: 'PROTEIN', val: result.protein_score },
+            { label: 'QUALITY', val: result.quality_score },
+            { label: 'CONTEXT', val: result.context_score },
+            { label: 'PATHWAY', val: result.pathway_activity_score },
+          ].map(({ label, val }) => (
+            <span key={label} className="bg-[#F5F5F7] text-[#6E6E73] text-xs px-2 py-0.5 rounded font-mono">
+              {(val ?? 0).toFixed(2)} {label}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Source chips */}
       {sources.length > 0 && (
@@ -229,7 +255,9 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
       {/* Score breakdown — all detailed evidence consolidated here (bars +
           quality/context reasoning + per-source percentiles + rank
           comparison) so the collapsed card stays scannable across 10+
-          results, and depth is only a click away. */}
+          results, and depth is only a click away. Single-gene only — none
+          of this evidence exists on a multi-gene combined result. */}
+      {!isMultiGene && (
       <Section label="Score breakdown">
         <div className="space-y-2">
           <ScoreBar label="RNA"     value={result.rna_score     ?? 0} />
@@ -294,8 +322,13 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
           </div>
         )}
       </Section>
+      )}
 
-      {/* AI Justification */}
+      {/* AI Justification — single-gene only. Its underlying semantics
+          (justify ONE target gene for this cell line) don't have a clear
+          meaning for a combined multi-gene ranking, so it's hidden rather
+          than justifying an arbitrary one of the queried genes. */}
+      {!isMultiGene && (
       <div className="border-t border-[#F5F5F7] mt-3 pt-3">
         {!aiData ? (
           <button
@@ -357,6 +390,7 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
