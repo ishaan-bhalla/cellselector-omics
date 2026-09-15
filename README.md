@@ -160,6 +160,23 @@ The validation set, while spanning the three gene classes, is modest and is used
 
 ---
 
+## Development History
+
+The system was built incrementally over four phases, tracked across 140 commits from May to September 2026:
+
+| Phase | Period | Focus |
+| --- | --- | --- |
+| 1. Identity foundation | May – Jun 2026 | Cellosaurus/HPA/GEO nomenclature reconciliation; three-tier matching with synonym rescue; master lookup table |
+| 2. Data pipeline | Jul 2026 | Chunked streaming preprocessors for HPA RNA, DepMap TPM, GEO expression, and CCLE proteomics (up to ~225M combined records); merge onto the identity spine |
+| 3. Scoring & ranking | Jul – Aug 2026 | Mutation-LOF, copy-number, RWR graph-centrality, ssGSEA pathway, and LambdaMART/RRF comparison scorers; per-gene-class weight optimisation; Neo4j knowledge graph; agentic RAG justifications |
+| 4. Deployment hardening | Aug – Sep 2026 | Docker/self-hosted Neo4j; Groq API backend swap; FastAPI + React interface; production bug fixes and evaluation refinement |
+
+Full commit-by-commit detail: `git log`.
+
+## Project Management
+
+Team task tracking for the phases above lives on a shared [Kanban board](https://claude.ai/artifact/7u1uJFmjx1esHW1j1joioY), seeded from the current open items in this README's *Limitations and Future Work* and `docs/progress_log.md`.
+
 ## Contributors
 
 **Team 26 · University of Bristol MSc Data Science**
