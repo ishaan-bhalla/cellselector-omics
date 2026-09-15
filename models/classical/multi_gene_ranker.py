@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 import sys
 
@@ -102,14 +103,35 @@ def rank_multi_gene(
     total_candidates_per_gene: dict[str, int] = {}
     all_seen_lines: set[str] = set()
 
-    for gene in genes:
-        df = rank(
-            gene,
-            disease_filter=disease_filter,
-            lineage_filter=lineage_filter,
-            top_n=None,  # full candidate distribution — see docstring
-            exclude_genes=exclude_genes,
-        )
+    # Fetch each gene's rank() concurrently rather than one after another —
+    # these are independent calls (no shared mutable state between them;
+    # each does its own parquet reads / Neo4j queries for its own gene) so
+    # there's no correctness reason to serialize them. Kept this function
+    # itself synchronous (unchanged signature — both existing call sites,
+    # api/main.py's `asyncio.to_thread(rank_multi_gene, ...)` and
+    # models.agentic.pipeline.run_multi_gene's direct sync call, needed no
+    # changes) by bridging to asyncio.gather + per-gene asyncio.to_thread
+    # via asyncio.run() here — same thread-pool-based concurrency the task
+    # asked for, without rippling an async signature change through a
+    # second, unrelated call site. asyncio.run() is safe here because this
+    # function is only ever invoked either directly (no running loop in
+    # that thread) or via asyncio.to_thread (which runs it in a fresh
+    # worker thread with no event loop of its own either way).
+    async def _fetch_all_genes() -> list[pd.DataFrame]:
+        return await asyncio.gather(*[
+            asyncio.to_thread(
+                rank, gene,
+                disease_filter=disease_filter,
+                lineage_filter=lineage_filter,
+                top_n=None,  # full candidate distribution — see docstring
+                exclude_genes=exclude_genes,
+            )
+            for gene in genes
+        ])
+
+    dfs = asyncio.run(_fetch_all_genes())
+
+    for gene, df in zip(genes, dfs):
         full_per_gene[gene] = df
         df = df[["cellosaurus_id", "official_name", "disease", "lineage",
                   "final_score"]].copy()
