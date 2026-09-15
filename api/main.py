@@ -330,6 +330,21 @@ async def get_all_genes(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 2c. GET /diseases/all — distinct disease values, for the Disease Filter
+# dropdown (same client-side-autocomplete pattern as /genes/all above, not
+# a new endpoint style). Reads app.state.cell_line_lookup's own "disease"
+# column, already loaded at startup — 2,076 rows, so this is a trivial
+# in-memory .unique() + sort, no precompute file needed (unlike genes,
+# which had to union across several 65-80M-row source files).
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/diseases/all")
+async def get_all_diseases(request: Request):
+    lookup = request.app.state.cell_line_lookup
+    diseases = sorted(lookup["disease"].dropna().unique().tolist())
+    return {"diseases": diseases, "count": len(diseases)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 

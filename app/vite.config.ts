@@ -7,6 +7,7 @@ export default defineConfig({
     proxy: {
       '/health':     'http://localhost:8001',
       '/genes':      'http://localhost:8001',
+      '/diseases':   'http://localhost:8001',
       '/recommend':  'http://localhost:8001',
       '/cell-lines': 'http://localhost:8001',
       '/stats':      'http://localhost:8001',

@@ -3,6 +3,8 @@ import { api } from '../api/client'
 import FitRing from './FitRing'
 import MetricRow from './MetricRow'
 import LabelValueRow from './LabelValueRow'
+import HoverPopover from './HoverPopover'
+import FitScoreExplanation from './FitScoreExplanation'
 import { renderBold } from '../utils/renderBold'
 import { getScorePct, getSources, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
 
@@ -10,13 +12,17 @@ interface Props {
   result: any
   gene: string
   diseaseFilter?: string
-  lineageFilter?: string
   excludeGenes?: string[]
   // Multi-gene combined search — passed through to /recommend/agentic so
   // the "Get AI Justification" button produces a joint justification
   // (see generate_multi_gene_justification) for a multi-gene result,
   // same as the single-gene path, just with this also set.
   additionalGenes?: string[]
+  // weights_used from the API response — passed through so the per-card
+  // Fit Score hover tooltip (Item 2) can show the REAL weights for this
+  // query, not generic/static text. Flat dict for single-gene, {gene:
+  // {...weights}} for multi-gene (same shape describeWeights expects).
+  weightsUsed?: any
   onCellLineClick: (cvcl: string) => void
 }
 
@@ -107,7 +113,7 @@ function Section({ label, count, children }: { label: string; count?: number; ch
   )
 }
 
-export default function ResultCard({ result, gene, diseaseFilter, lineageFilter, excludeGenes, additionalGenes, onCellLineClick }: Props) {
+export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, additionalGenes, weightsUsed, onCellLineClick }: Props) {
   const [aiData, setAiData] = useState<any>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState(false)
@@ -123,7 +129,7 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
   // via utils/resultFields so this logic can't drift between variants.
   const isMultiGene = isMultiGeneResult(result)
   const scorePct = getScorePct(result)
-  const hasContextFilter = computeHasContextFilter(diseaseFilter, lineageFilter)
+  const hasContextFilter = computeHasContextFilter(diseaseFilter)
   const sources = getSources(result)
 
   const handleAI = async () => {
@@ -175,7 +181,22 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
             <div className="text-cso-body font-mono text-xs mt-1">{result.cellosaurus_id}</div>
           </div>
         </div>
-        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} dim={!isTop} />
+        {/* Item 2: the Fit Score weight breakdown is now a hover/focus
+            popover anchored right here, not a permanent panel above the
+            results list — real per-query weights via weightsUsed, not
+            static text. */}
+        <HoverPopover
+          content={
+            <FitScoreExplanation
+              genes={[gene, ...(additionalGenes ?? [])]}
+              weightsUsed={weightsUsed}
+              isMultiGene={isMultiGene}
+              geneClass={result.gene_class}
+            />
+          }
+        >
+          <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} dim={!isTop} />
+        </HoverPopover>
       </div>
 
       {/* Per-gene percentile breakdown — multi-gene only. The transparency

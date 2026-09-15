@@ -16,6 +16,12 @@ export const api = {
   getAllGenes: () =>
     fetch('/genes/all').then(r => r.json()),
 
+  // Distinct disease values (cell_line_lookup's own "disease" column),
+  // fetched once on mount — same client-side-autocomplete pattern as
+  // getAllGenes, powers the Disease Filter dropdown.
+  getAllDiseases: () =>
+    fetch('/diseases/all').then(r => r.json()),
+
   recommendClassical: (body: {
     gene: string
     additional_genes?: string[]
@@ -56,10 +62,12 @@ export const api = {
     return fetch(`/cell-lines${qs ? '?' + qs : ''}`).then(r => r.json())
   },
 
-  // /graph/explore and /graph/pathway-neighbors remain valid, tested API
-  // endpoints (see api/main.py) — just no longer called from the frontend
-  // now that GraphExplorer.tsx is gone. cellLinesViaPathway is the one the
-  // Search page's Pathway-Connected Recommendations section actually uses.
+  // /graph/explore, /graph/pathway-neighbors, and (as of Item 7's removal
+  // of the Pathway-Connected Recommendations section) cellLinesViaPathway
+  // itself all remain valid, tested API endpoints (see api/main.py) —
+  // just no longer called from the frontend. Left in place rather than
+  // deleted, same as /graph/explore/pathway-neighbors already were after
+  // GraphExplorer.tsx was removed.
   cellLinesViaPathway: (gene: string, diseaseFilter?: string, topK = 5) => {
     const q = new URLSearchParams()
     if (diseaseFilter) q.append('disease_filter', diseaseFilter)

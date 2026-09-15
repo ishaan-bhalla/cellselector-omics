@@ -13,11 +13,14 @@ export function getScorePct(result: any): number {
   return (isMulti ? result.combined_score : result.final_score) ?? 0
 }
 
-// CONTEXT is "n/a", not 0.00, when no disease/tissue filter was applied —
-// see Part 1 PROBLEM B of the original redesign task. Both filters are
-// checked (either can produce a real context_score).
-export function hasContextFilter(diseaseFilter?: string, lineageFilter?: string): boolean {
-  return Boolean(diseaseFilter?.trim() || lineageFilter?.trim())
+// CONTEXT is "n/a", not 0.00, when no disease filter was applied — see
+// Part 1 PROBLEM B of the original redesign task. Used to also check a
+// lineage/Tissue Type filter here too (either could produce a real
+// context_score) — that filter was removed from the UI entirely per user
+// testing feedback, so disease is now the only thing that can make
+// context_score real rather than n/a.
+export function hasContextFilter(diseaseFilter?: string): boolean {
+  return Boolean(diseaseFilter?.trim())
 }
 
 export function getSources(result: any): string[] {
