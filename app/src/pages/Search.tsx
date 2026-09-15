@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import ResultCard from '../components/ResultCard'
+import ResultCardGrid from '../components/ResultCardGrid'
+import ResultCardCompact from '../components/ResultCardCompact'
 import SlideOver from '../components/SlideOver'
+import Reveal from '../components/Reveal'
+import ViewModeToggle from '../components/ViewModeToggle'
+import { getViewMode, setViewMode, type ViewMode } from '../utils/viewMode'
 
 const LOADING_LINES = [
   'Resolving gene symbol',
@@ -184,12 +189,31 @@ export default function Search() {
   const [showAddGene, setShowAddGene] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+  // Persisted the same way as the theme choice (Stage 1) — see
+  // utils/viewMode.ts.
+  const [viewMode, setViewModeState] = useState<ViewMode>(getViewMode)
+  const changeViewMode = (m: ViewMode) => { setViewModeState(m); setViewMode(m) }
+  // Keeps the loading takeover MOUNTED for a brief window after `loading`
+  // flips false, so its collapse (Part 4) is a CSS transition rather than
+  // an instant unmount — see the takeover's own maxHeight/opacity, which
+  // key off `loading` directly while this only controls whether it's in
+  // the DOM at all.
+  const [takeoverVisible, setTakeoverVisible] = useState(false)
 
   useEffect(() => {
     api.getAllGenes()
       .then(d => setAllGenes(d.genes ?? []))
       .catch(() => setAllGenes([]))
   }, [])
+
+  useEffect(() => {
+    if (loading) {
+      setTakeoverVisible(true)
+      return
+    }
+    const t = setTimeout(() => setTakeoverVisible(false), 420)
+    return () => clearTimeout(t)
+  }, [loading])
 
   const selectGene = async (g: string) => {
     setGene(g)
@@ -365,8 +389,8 @@ export default function Search() {
       {/* Search panel */}
       <div className="bg-cso-card border-b border-[var(--border)] pt-10">
         <div className="max-w-3xl mx-auto px-6 pb-8">
-          <p className="text-[var(--text-body)] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
-          <h1 className="text-[var(--text-heading)] text-3xl font-bold mb-8">Search Tool</h1>
+          <p className="text-[var(--text-body)] text-xs tracking-[0.2em] uppercase mb-3">Cell Line Recommender</p>
+          <h1 className="font-bold mb-8" style={{ fontSize: 'clamp(2rem, 4.5vw, 3.25rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>Search Tool</h1>
 
           {/* Gene input — client-side-filtered dropdown via the shared
               GeneAutocompleteInput (also used below for additional genes).
@@ -496,17 +520,50 @@ export default function Search() {
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        {/* Loading — plain status line, not a decorative terminal window */}
-        {loading && (
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-4 h-4 border border-[var(--border)] border-t-[var(--accent)] rounded-full animate-spin flex-shrink-0" />
-            <span className="text-xs text-[var(--text-body)]">
-              {LOADING_LINES[loadLine]}
-            </span>
+      {/* Search-execution takeover (Part 4) — a genuine full-width moment
+          while a search runs, not a small box below the form: expands to
+          become the visual focus, each console line stages in after the
+          last (see LOADING_LINES.slice + the .console-line animation),
+          then collapses smoothly (maxHeight/opacity transition, kept
+          mounted an extra ~420ms via takeoverVisible so the collapse is
+          visible rather than an instant unmount) into the results below. */}
+      {takeoverVisible && (
+        <div
+          className="w-full overflow-hidden"
+          style={{
+            maxHeight: loading ? 640 : 0,
+            opacity: loading ? 1 : 0,
+            borderBottom: loading ? '1px solid var(--border)' : '1px solid transparent',
+            transition: 'max-height 420ms ease, opacity 280ms ease, border-color 420ms ease',
+          }}
+        >
+          <div className="max-w-4xl mx-auto px-6" style={{ paddingTop: 96, paddingBottom: 96 }}>
+            <div className="font-mono" style={{ fontSize: 'clamp(1rem, 2.4vw, 1.65rem)' }}>
+              {LOADING_LINES.slice(0, loadLine + 1).map((line, i) => {
+                const isCurrent = i === loadLine
+                return (
+                  <div
+                    key={i}
+                    className="console-line"
+                    style={{
+                      marginBottom: 14,
+                      color: isCurrent ? 'var(--text-heading)' : 'var(--text-body)',
+                      opacity: isCurrent ? 1 : 0.45,
+                    }}
+                  >
+                    {line}
+                    {isCurrent && i < LOADING_LINES.length - 1 && (
+                      <span className="animate-pulse ml-1" style={{ color: 'var(--accent)' }}>_</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        )}
+        </div>
+      )}
 
+      <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Error */}
         {error && (
           <div className="bg-cso-card border border-[var(--accent-amber)] rounded p-4 text-[var(--accent-amber)] text-sm mb-6">
@@ -584,69 +641,110 @@ export default function Search() {
                 )}
               </div>
 
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
               <div>
-                <div className="text-[var(--text-heading)] font-bold text-lg">
-                  Showing {displayedResults?.results.length} of {allResults.results?.length} loaded for{' '}
+                <div style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1.75rem', letterSpacing: '-0.01em', lineHeight: 1.15 }}>
+                  Showing {displayedResults?.results.length} of {allResults.results?.length} for{' '}
                   <span className="font-mono">
                     {isMultiGene
                       ? [allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])].join(' + ')
                       : allResults.query?.gene}
                   </span>
                   {allResults.query?.disease_filter && (
-                    <span className="text-[var(--text-body)] text-sm font-normal ml-2">
+                    <span className="text-[var(--text-body)] text-base font-normal ml-2">
                       in {allResults.query.disease_filter}
                     </span>
                   )}
                 </div>
-                <div className="text-[var(--text-body)] text-xs mt-0.5 font-mono">
+                <div className="text-[var(--text-body)] text-xs mt-1.5 font-mono">
                   {isMultiGene
                     ? `${allResults.metadata?.n_excluded_missing_data ?? 0} lines excluded (missing data for ≥1 gene)`
                     : `${allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored`}
                   {allResults.metadata?.execution_time_ms && ` · ${allResults.metadata.execution_time_ms}ms`}
                 </div>
               </div>
-              <div className="relative" ref={exportMenuRef}>
-                <button
-                  onClick={() => setExportOpen(o => !o)}
-                  className="text-xs border border-[var(--border)] text-[var(--text-body)] hover:text-[var(--text-heading)] hover:border-[var(--text-heading)] px-3 py-1.5 rounded transition-colors"
-                >
-                  Export
-                </button>
-                {exportOpen && (
-                  <div className="absolute right-0 mt-2 w-32 bg-cso-card border border-[var(--border)] rounded z-10 overflow-hidden">
-                    {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
-                      <button
-                        key={label}
-                        onClick={() => { fn(); setExportOpen(false) }}
-                        className="w-full text-left px-4 py-2 hover:bg-[var(--bg)] text-sm text-[var(--text-heading)] transition-colors"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              <div className="flex items-center gap-3">
+                <ViewModeToggle mode={viewMode} onChange={changeViewMode} />
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    onClick={() => setExportOpen(o => !o)}
+                    className="text-xs border border-[var(--border)] text-[var(--text-body)] hover:text-[var(--text-heading)] hover:border-[var(--text-heading)] px-3 py-1.5 rounded transition-colors"
+                  >
+                    Export
+                  </button>
+                  {exportOpen && (
+                    <div className="absolute right-0 mt-2 w-32 bg-cso-card border border-[var(--border)] rounded z-10 overflow-hidden">
+                      {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
+                        <button
+                          key={label}
+                          onClick={() => { fn(); setExportOpen(false) }}
+                          className="w-full text-left px-4 py-2 hover:bg-[var(--bg)] text-sm text-[var(--text-heading)] transition-colors"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="space-y-4">
-              {(displayedResults!.results as any[]).map((r: any) => (
-                <ResultCard
-                  key={r.cellosaurus_id}
-                  result={r}
-                  gene={allResults.query?.gene ?? gene}
-                  additionalGenes={allResults.query?.additional_genes}
-                  diseaseFilter={allResults.query?.disease_filter}
-                  lineageFilter={allResults.query?.lineage_filter}
-                  excludeGenes={
-                    excludeGenes
-                      ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-                      : undefined
-                  }
-                  onCellLineClick={setSelectedCVCL}
-                />
-              ))}
-            </div>
+            {/* Three real, distinct layouts over the same result data (Part
+                3) — not decoration: LIST is the existing full-detail
+                ResultCard, GRID a 2-column compact card, COMPACT a dense
+                single-line row. Each card reveals on scroll (Part 2). */}
+            {viewMode === 'list' && (
+              <div className="space-y-4">
+                {(displayedResults!.results as any[]).map((r: any, i: number) => (
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 6) * 40}>
+                    <ResultCard
+                      result={r}
+                      gene={allResults.query?.gene ?? gene}
+                      additionalGenes={allResults.query?.additional_genes}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      lineageFilter={allResults.query?.lineage_filter}
+                      excludeGenes={
+                        excludeGenes
+                          ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+                          : undefined
+                      }
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  </Reveal>
+                ))}
+              </div>
+            )}
+
+            {viewMode === 'grid' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {(displayedResults!.results as any[]).map((r: any, i: number) => (
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 8) * 30}>
+                    <ResultCardGrid
+                      result={r}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      lineageFilter={allResults.query?.lineage_filter}
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  </Reveal>
+                ))}
+              </div>
+            )}
+
+            {viewMode === 'compact' && (
+              <Reveal>
+                <div className="bg-cso-card border border-[var(--border)] rounded overflow-hidden">
+                  {(displayedResults!.results as any[]).map((r: any) => (
+                    <ResultCardCompact
+                      key={r.cellosaurus_id}
+                      result={r}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      lineageFilter={allResults.query?.lineage_filter}
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  ))}
+                </div>
+              </Reveal>
+            )}
 
             {/* Pathway-Connected Recommendations */}
             <div className="mt-8 pt-8 border-t border-[var(--border)]">

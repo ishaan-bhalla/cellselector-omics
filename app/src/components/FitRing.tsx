@@ -1,6 +1,9 @@
-// Flat circular progress ring for the Fit Score — see the task's Part 2
-// spec. No glow, no blur, no gradient fill, no shadow: a plain track +
-// fill arc, both flat strokes.
+// Flat circular progress ring for the Fit Score — see the original
+// redesign task's Part 2 spec. No glow, no blur, no gradient fill, no
+// shadow: a plain track + fill arc, both flat strokes. Part 5/6 of the
+// studio-grade pass: the centre numeral reads as a confident, oversized
+// instrument readout, not default-sized text that happens to be bold —
+// it's deliberately the largest single number on a result card.
 
 interface Props {
   /** 0-1 */
@@ -9,9 +12,9 @@ interface Props {
   label?: string
 }
 
-export default function FitRing({ score, size = 76, label = 'FIT SCORE' }: Props) {
+export default function FitRing({ score, size = 88, label = 'FIT SCORE' }: Props) {
   const pct = Math.round(Math.min(1, Math.max(0, score || 0)) * 100)
-  const stroke = 6
+  const stroke = Math.max(5, Math.round(size * 0.065))
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const dash = (pct / 100) * c
@@ -32,20 +35,20 @@ export default function FitRing({ score, size = 76, label = 'FIT SCORE' }: Props
           strokeLinecap="round"
           strokeDasharray={`${dash} ${c - dash}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          style={{ transition: 'stroke-dasharray 0.4s ease' }}
+          style={{ transition: 'stroke-dasharray 0.5s ease' }}
         />
         <text
           x="50%" y="50%"
           textAnchor="middle" dominantBaseline="central"
           fontFamily="'IBM Plex Mono', monospace"
-          fontSize={size * 0.26}
-          fontWeight={600}
+          fontSize={size * 0.32}
+          fontWeight={700}
           fill="var(--text-heading)"
         >
           {pct}
         </text>
       </svg>
-      <span className="text-[10px] uppercase tracking-[0.08em] text-cso-body mt-1">{label}</span>
+      <span className="text-[10px] uppercase tracking-[0.08em] text-cso-body mt-1.5">{label}</span>
     </div>
   )
 }

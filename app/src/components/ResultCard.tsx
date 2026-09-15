@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import FitRing from './FitRing'
 import MetricRow from './MetricRow'
+import LabelValueRow from './LabelValueRow'
 import { renderBold } from '../utils/renderBold'
+import { getScorePct, getSources, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
 
 interface Props {
   result: any
@@ -105,24 +107,6 @@ function Section({ label, count, children }: { label: string; count?: number; ch
   )
 }
 
-// Two-column label/value row for GENE CLASS / GENE ROLE (Part 1, PROBLEM A)
-// — an uppercase, letter-spaced label on the left with a hover explanation
-// (title attribute), plain value text on the right, each on its own line so
-// the two concepts can never read as one run-together string again.
-function LabelValueRow({ label, value, explanation }: { label: string; value: string; explanation: string }) {
-  return (
-    <div className="flex items-baseline gap-3 py-0.5">
-      <span
-        className="text-[11px] uppercase tracking-[0.08em] text-cso-body w-24 flex-shrink-0 cursor-help"
-        title={explanation}
-      >
-        {label}
-      </span>
-      <span className="text-sm text-cso-heading">{value}</span>
-    </div>
-  )
-}
-
 export default function ResultCard({ result, gene, diseaseFilter, lineageFilter, excludeGenes, additionalGenes, onCellLineClick }: Props) {
   const [aiData, setAiData] = useState<any>(null)
   const [aiLoading, setAiLoading] = useState(false)
@@ -135,21 +119,12 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
   // field (rna_score, hpa_evidence, pathway_activity_score, ...) — detected
   // here via per_gene_percentiles' presence, the one field unique to that
   // shape, so the sections below that don't apply to it stay hidden rather
-  // than rendering misleading zeros.
-  const isMultiGene = result.per_gene_percentiles != null
-  const scorePct = (isMultiGene ? result.combined_score : result.final_score) ?? 0
-
-  // CONTEXT is "n/a", not 0.00, when no disease/tissue filter was applied —
-  // a score of exactly 0 there would misleadingly read as a poor match
-  // rather than "no filter was applied" (Part 1, PROBLEM B).
-  const hasContextFilter = Boolean(diseaseFilter?.trim() || lineageFilter?.trim())
-
-  const sources = [
-    (result.hpa_score ?? 0) > 0 && 'HPA RNA',
-    (result.depmap_score ?? 0) > 0 && 'DepMap',
-    (result.geo_confirmation ?? 0) !== 0 && 'GEO',
-    (result.protein_score ?? 0) > 0 && 'Proteomics',
-  ].filter(Boolean) as string[]
+  // than rendering misleading zeros. Shared with the GRID/COMPACT layouts
+  // via utils/resultFields so this logic can't drift between variants.
+  const isMultiGene = isMultiGeneResult(result)
+  const scorePct = getScorePct(result)
+  const hasContextFilter = computeHasContextFilter(diseaseFilter, lineageFilter)
+  const sources = getSources(result)
 
   const handleAI = async () => {
     setAiLoading(true)
@@ -175,23 +150,30 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
     <div
       className={`bg-cso-card border border-cso-border rounded p-5 ${isTop ? 'border-l-4 border-l-cso-teal' : ''}`}
     >
-      {/* Top row — rank, name, CVCL id, fit ring */}
-      <div className="flex items-start justify-between mb-3 gap-4">
-        <div className="flex items-start gap-3 flex-1 min-w-0">
-          <span className="text-cso-body font-mono text-xl font-bold leading-none flex-shrink-0 mt-0.5">
+      {/* Top row — rank, name, CVCL id, fit ring. Part 6: the rank numeral
+          and cell line name carry real visual weight, and the ring (sized
+          up further, see FitRing's own default) is the clear focal point
+          rather than one element among several equally-weighted ones. */}
+      <div className="flex items-start justify-between mb-4 gap-5">
+        <div className="flex items-start gap-4 flex-1 min-w-0">
+          <span
+            className="font-mono leading-none flex-shrink-0"
+            style={{ fontSize: '2.75rem', fontWeight: 300, color: 'var(--text-body)', opacity: 0.6 }}
+          >
             {String(result.rank).padStart(2, '0')}
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 pt-1.5">
             <button
               onClick={() => onCellLineClick(result.cellosaurus_id)}
-              className="text-cso-heading font-semibold text-base leading-tight hover:text-cso-teal transition-colors text-left truncate max-w-xs block"
+              className="hover:text-cso-teal transition-colors text-left truncate max-w-xs block"
+              style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1.375rem', lineHeight: 1.15 }}
             >
               {result.official_name}
             </button>
-            <div className="text-cso-body font-mono text-xs mt-0.5">{result.cellosaurus_id}</div>
+            <div className="text-cso-body font-mono text-xs mt-1">{result.cellosaurus_id}</div>
           </div>
         </div>
-        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} />
+        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} />
       </div>
 
       {/* Per-gene percentile breakdown — multi-gene only. The transparency

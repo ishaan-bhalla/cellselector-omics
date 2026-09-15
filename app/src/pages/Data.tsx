@@ -1,3 +1,5 @@
+import Reveal from '../components/Reveal'
+
 const SOURCES = [
   {
     key: 'HPA',
@@ -28,60 +30,77 @@ const SOURCES = [
 
 export default function Data() {
   return (
-    <div className="bg-cso-bg pt-24">
-      <section className="bg-cso-card py-20">
+    <div className="bg-cso-bg">
+      <section className="bg-cso-card py-24" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="max-w-4xl mx-auto px-6">
-          <p className="text-[11px] uppercase tracking-[0.08em] text-cso-body mb-3">Data</p>
-          <h1 className="text-cso-heading text-4xl font-bold mb-6">Underlying datasets</h1>
-          <p className="text-cso-body text-lg leading-relaxed">
-            Every Fit Score is built from five independently sourced datasets,
-            combined via a gene-class-adaptive weighted formula and a graph
-            database of gene, cell line and pathway relationships. No
-            component is invented or estimated: a missing data source for a
-            given gene or cell line lowers that component's weight rather
-            than being filled in with a guess.
-          </p>
+          <Reveal>
+            <p className="text-[11px] uppercase tracking-[0.08em] text-cso-body mb-4">Data</p>
+            <h1
+              className="font-bold mb-8"
+              style={{ fontSize: 'clamp(2.5rem, 6vw, 4.5rem)', color: 'var(--text-heading)', lineHeight: 1.02, letterSpacing: '-0.02em' }}
+            >
+              Underlying datasets
+            </h1>
+            <p className="text-cso-body leading-relaxed" style={{ fontSize: 19, maxWidth: 640 }}>
+              Every Fit Score is built from five independently sourced datasets,
+              combined via a gene-class-adaptive weighted formula and a graph
+              database of gene, cell line and pathway relationships. No
+              component is invented or estimated: a missing data source for a
+              given gene or cell line lowers that component's weight rather
+              than being filled in with a guess.
+            </p>
+          </Reveal>
         </div>
       </section>
 
-      <section className="bg-cso-bg py-16">
+      <section className="bg-cso-bg py-24">
         <div className="max-w-4xl mx-auto px-6">
-          <h2 className="text-cso-heading text-2xl font-bold mb-8">Sources</h2>
-          <div className="space-y-4">
-            {SOURCES.map(s => (
-              <div key={s.key} className="bg-cso-card border border-cso-border rounded p-5">
-                <div className="flex items-baseline gap-3 mb-1.5">
-                  <span className="text-cso-teal font-mono font-semibold text-xs">{s.key}</span>
-                  <span className="text-cso-heading font-semibold text-sm">{s.name}</span>
+          <Reveal>
+            <h2 className="font-bold mb-12" style={{ fontSize: 'clamp(1.75rem, 3.5vw, 2.75rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+              Sources
+            </h2>
+          </Reveal>
+          <div>
+            {SOURCES.map((s, i) => (
+              <Reveal key={s.key} delay={i * 50}>
+                <div className="flex items-baseline gap-6 py-6" style={{ borderTop: '1px solid var(--border)' }}>
+                  <span className="text-cso-teal font-mono font-semibold text-sm flex-shrink-0 w-16">{s.key}</span>
+                  <div>
+                    <div className="text-cso-heading font-semibold mb-1" style={{ fontSize: '1.05rem' }}>{s.name}</div>
+                    <p className="text-cso-body text-sm leading-relaxed" style={{ maxWidth: 560 }}>{s.body}</p>
+                  </div>
                 </div>
-                <p className="text-cso-body text-sm leading-relaxed">{s.body}</p>
-              </div>
+              </Reveal>
             ))}
           </div>
         </div>
       </section>
 
-      <section className="bg-cso-card py-16">
+      <section className="bg-cso-card py-24" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="max-w-4xl mx-auto px-6">
-          <h2 className="text-cso-heading text-2xl font-bold mb-6">Validation</h2>
-          <p className="text-cso-body text-base leading-relaxed mb-4">
-            Scoring weights are learned per gene class (tissue-specific,
-            ubiquitous, loss-of-function) by maximising Mean Reciprocal Rank
-            against a 44-gene validation set of literature-confirmed
-            gene, cell line associations, then checked with leave-one-out
-            cross-validation so a weight vector can't simply overfit the
-            genes it was tuned on.
-          </p>
-          <p className="text-cso-body text-base leading-relaxed">
-            Candidate scoring components are only adopted into production
-            once they pass the same cycle: a weight-value grid search,
-            an in-sample evaluation, cross-validated re-evaluation, and a
-            paired bootstrap significance test against the current
-            baseline. A component that doesn't clear that bar (graph
-            network centrality did; pathway-neighbour co-expression did
-            not) is left out of the active formula rather than included
-            for its own sake.
-          </p>
+          <Reveal>
+            <h2 className="font-bold mb-8" style={{ fontSize: 'clamp(1.75rem, 3.5vw, 2.75rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+              Validation
+            </h2>
+            <p className="text-cso-body leading-relaxed mb-4" style={{ fontSize: 16, maxWidth: 640 }}>
+              Scoring weights are learned per gene class (tissue-specific,
+              ubiquitous, loss-of-function) by maximising Mean Reciprocal Rank
+              against a 44-gene validation set of literature-confirmed
+              gene, cell line associations, then checked with leave-one-out
+              cross-validation so a weight vector can't simply overfit the
+              genes it was tuned on.
+            </p>
+            <p className="text-cso-body leading-relaxed" style={{ fontSize: 16, maxWidth: 640 }}>
+              Candidate scoring components are only adopted into production
+              once they pass the same cycle: a weight-value grid search,
+              an in-sample evaluation, cross-validated re-evaluation, and a
+              paired bootstrap significance test against the current
+              baseline. A component that doesn't clear that bar (graph
+              network centrality did; pathway-neighbour co-expression did
+              not) is left out of the active formula rather than included
+              for its own sake.
+            </p>
+          </Reveal>
         </div>
       </section>
     </div>

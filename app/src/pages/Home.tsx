@@ -2,23 +2,59 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import DNAHelix from '../components/DNAHelix'
+import Reveal from '../components/Reveal'
 
-// Real, verifiable capabilities — not a three-card row (prohibited by the
-// design system), a 2x2 grid instead.
+// Underline-reveal CTA — a thin bar that grows from 0 to full width under
+// the text on hover (transform: scaleX, transform-origin left), in place
+// of a filled pill button. Local hover state rather than a global CSS
+// rule, so this stays self-contained.
+function UnderlineCTA({ to, children }: { to: string; children: React.ReactNode }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <Link
+      to={to}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: 'relative', color: 'var(--text-heading)',
+        fontSize: 18, fontWeight: 600, textDecoration: 'none',
+        paddingBottom: 6, display: 'inline-block',
+      }}
+    >
+      {children}
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, height: 2,
+          background: 'var(--accent)', transform: hovered ? 'scaleX(1)' : 'scaleX(0)',
+          transformOrigin: 'left', transition: 'transform 280ms ease',
+        }}
+      />
+    </Link>
+  )
+}
+
+// Real, verifiable capabilities — kept from the Phase 1 copy, restyled
+// below as a flowing list (no bordered 3-card row, no numbered-circle step
+// tracker — see Part 1's explicit redesign instruction).
 const CAPABILITIES = [
   {
+    n: '01',
     title: 'Multi-omics integration',
     body: 'RNA expression from HPA and DepMap, protein abundance from CCLE proteomics, and CRISPR dependency from DepMap, combined into one evidence-backed score.',
   },
   {
+    n: '02',
     title: 'Gene-class-adaptive scoring',
     body: 'Weights are learned separately for tissue-specific, ubiquitous, and loss-of-function genes, since each is suited by a different mix of evidence.',
   },
   {
+    n: '03',
     title: 'Knowledge-graph network centrality',
     body: 'A random-walk-with-restart signal over a graph of genes, cell lines, and pathways captures network proximity that direct expression data alone misses.',
   },
   {
+    n: '04',
     title: 'Agentic justifications with citations',
     body: 'An optional AI-generated rationale explains a recommendation in plain language and cites the specific datasets behind it, so it can be checked, not just trusted.',
   },
@@ -31,6 +67,43 @@ const STEPS = [
   { n: '04', title: 'Get an AI justification', body: 'a cited, plain-language rationale for the top pick' },
 ]
 
+// Doubled/ghost headline — the front copy solid, a second copy of the same
+// text rendered behind it at low opacity and a small offset (Part 1's
+// "documenting emotion, documenting emotion" device). Pure CSS: one
+// relatively-positioned element, one absolutely-positioned duplicate
+// behind it — no library, no JS-driven animation.
+function KineticHeadline() {
+  const text = (
+    <>
+      Find the right<br />cell line.
+    </>
+  )
+  return (
+    <div style={{ position: 'relative' }}>
+      <h1
+        aria-hidden="true"
+        style={{
+          position: 'absolute', top: 10, left: 8,
+          margin: 0, color: 'var(--text-heading)', opacity: 0.1,
+          fontSize: 'clamp(3.5rem, 9vw, 8.5rem)', fontWeight: 700, lineHeight: 0.98,
+          letterSpacing: '-0.02em', userSelect: 'none', pointerEvents: 'none',
+        }}
+      >
+        {text}
+      </h1>
+      <h1
+        style={{
+          position: 'relative', margin: 0, color: 'var(--text-heading)',
+          fontSize: 'clamp(3.5rem, 9vw, 8.5rem)', fontWeight: 700, lineHeight: 0.98,
+          letterSpacing: '-0.02em',
+        }}
+      >
+        {text}
+      </h1>
+    </div>
+  )
+}
+
 export default function Home() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [health, setHealth] = useState<any>(null)
@@ -39,10 +112,6 @@ export default function Home() {
     api.health().then(setHealth).catch(() => {})
   }, [])
 
-  // Real, verifiable figures only (no invented statistics) — the cell line
-  // count comes live from /health with a hardcoded fallback matching its
-  // known current value; the other three are structural facts about the
-  // scoring system itself, not results that could go stale.
   const statItems = [
     { value: health?.cell_lines ? health.cell_lines.toLocaleString() : '2,076', label: 'Cell lines' },
     { value: '5',  label: 'Data sources' },
@@ -53,142 +122,135 @@ export default function Home() {
   return (
     <div className="bg-cso-bg">
 
-      {/* ── Hero ── */}
-      <section style={{ position: 'relative', height: 'calc(100vh - 65px)', minHeight: 480, overflow: 'hidden', background: 'var(--bg)' }}>
-
-        {/* Zone 1 — DNA helix, left 55% */}
-        <div
-          style={{ position: 'absolute', left: 0, top: 0, width: '55%', height: '100%', overflow: 'hidden' }}
-          onMouseMove={e => {
-            const r = e.currentTarget.getBoundingClientRect()
-            setMousePos({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
-          }}
-          onMouseLeave={() => setMousePos(null)}
-        >
+      {/* ── Hero — immersive, full-bleed, chrome-free: eyebrow, oversized
+          doubled headline, subhead, one confident CTA. DNAHelix demoted to
+          a faint full-bleed backdrop rather than a competing 55%-width
+          zone, so the typography is unambiguously the focal point. ── */}
+      <section
+        style={{
+          position: 'relative', height: 'calc(100vh - 65px)', minHeight: 560,
+          overflow: 'hidden', background: 'var(--bg)',
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+        }}
+        onMouseMove={e => {
+          const r = e.currentTarget.getBoundingClientRect()
+          setMousePos({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
+        }}
+        onMouseLeave={() => setMousePos(null)}
+      >
+        {/* Backdrop layer — full-bleed, faint, behind the text */}
+        <div style={{ position: 'absolute', inset: 0, opacity: 0.28, pointerEvents: 'none' }}>
           <DNAHelix mousePos={mousePos} />
         </div>
 
-        {/* Thin fade divider */}
-        <div
-          style={{
-            position: 'absolute', left: '55%', top: '10%',
-            height: '80%', width: 1, pointerEvents: 'none',
-            background: 'linear-gradient(to bottom, transparent, var(--border) 20%, var(--border) 80%, transparent)',
-          }}
-        />
-
-        {/* Zone 2 — text, right 45%, vertically centered */}
-        <div
-          style={{
-            position: 'absolute', right: 0, top: 0,
-            width: '45%', height: '100%',
-            display: 'flex', flexDirection: 'column', justifyContent: 'center',
-            padding: '0 60px 0 40px',
-            background: 'var(--bg)',
-          }}
-        >
+        {/* Content — left-aligned, generous side margin, vertically centred */}
+        <div style={{ position: 'relative', zIndex: 1, padding: '0 5vw', maxWidth: 1100 }}>
           <p style={{
             fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-body)',
             fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase',
-            marginBottom: 24,
+            marginBottom: 28,
           }}>
             University of Bristol &times; AstraZeneca
           </p>
-          <h1 style={{ color: 'var(--text-heading)', fontSize: 56, fontWeight: 700, lineHeight: 1.1, marginBottom: 20 }}>
-            Find the right<br />cell line.
-          </h1>
-          <p style={{ color: 'var(--text-body)', fontSize: 17, lineHeight: 1.6, maxWidth: 380, marginBottom: 40 }}>
+
+          <KineticHeadline />
+
+          <p style={{ color: 'var(--text-body)', fontSize: 18, lineHeight: 1.6, maxWidth: 460, margin: '32px 0 0' }}>
             Multi-omics recommendation across 2,076 human cell lines,
             evidence-backed and citable.
           </p>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Link
-              to="/search"
-              style={{
-                background: 'var(--accent)', color: 'var(--bg-card)',
-                borderRadius: 4, padding: '13px 26px',
-                fontWeight: 600, fontSize: 14,
-                textDecoration: 'none', display: 'inline-block',
-              }}
-            >
-              Launch tool
-            </Link>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 40, marginTop: 48 }}>
+            {/* Primary CTA — underline-reveal, not a filled pill button */}
+            <UnderlineCTA to="/search">Launch Tool</UnderlineCTA>
             <Link
               to="/about"
-              style={{
-                background: 'transparent', border: '1px solid var(--border)',
-                color: 'var(--text-heading)', borderRadius: 4, padding: '13px 26px',
-                fontSize: 14, textDecoration: 'none', display: 'inline-block',
-              }}
+              style={{ color: 'var(--text-body)', fontSize: 14, textDecoration: 'none' }}
             >
-              About
+              About the project
             </Link>
           </div>
         </div>
 
-        {/* Scroll indicator — custom SVG chevron, not a unicode glyph (the
-            previous "↓ SCROLL" text character was the reported rendering
-            glitch at the top of the stats band immediately below). */}
+        {/* Scroll cue — a thin line with a slow single fade pulse, no bounce */}
         <div
-          className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 z-10"
+          className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2"
           style={{ pointerEvents: 'none' }}
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-body)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M3 6l5 5 5-5" />
-          </svg>
-          <span className="text-[10px] font-mono uppercase tracking-[0.15em] text-cso-body">Scroll</span>
+          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-cso-body scroll-pulse">Scroll</span>
+          <div className="scroll-pulse" style={{ width: 1, height: 28, background: 'var(--border)' }} />
         </div>
       </section>
 
-      {/* ── Stats ── */}
-      <section className="bg-cso-card py-14" style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
-        <div className="max-w-5xl mx-auto px-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
-            {statItems.map(s => (
-              <div key={s.label} className="text-center">
-                <div className="text-cso-heading font-mono font-bold text-3xl mb-1 tabular-nums">
-                  {s.value}
+      {/* ── Details — one flowing section (stats, capabilities, steps),
+          no bordered 3-card grid, no numbered-circle step tracker. Each
+          block reveals on scroll (Part 2). ── */}
+      <section className="bg-cso-bg" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="max-w-4xl mx-auto px-6 py-28">
+
+          {/* Stats — quiet, inline, mono */}
+          <Reveal className="mb-28">
+            <div className="flex flex-wrap gap-x-12 gap-y-4" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 40 }}>
+              {statItems.map(s => (
+                <div key={s.label}>
+                  <div className="font-mono font-bold tabular-nums" style={{ fontSize: 'clamp(2rem, 4vw, 3rem)', color: 'var(--text-heading)', lineHeight: 1 }}>
+                    {s.value}
+                  </div>
+                  <div className="text-[11px] uppercase tracking-[0.1em] text-cso-body mt-2">{s.label}</div>
                 </div>
-                <div className="text-[11px] uppercase tracking-[0.08em] text-cso-body">{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+              ))}
+            </div>
+          </Reveal>
 
-      {/* ── Capabilities (2x2, not three-in-a-row) ── */}
-      <section className="bg-cso-bg py-20">
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-cso-heading text-3xl font-bold mb-12 text-center">What it does</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            {CAPABILITIES.map(c => (
-              <div key={c.title} className="bg-cso-card border border-cso-border rounded p-7">
-                <h3 className="text-cso-heading font-semibold text-lg mb-2.5">{c.title}</h3>
-                <p className="text-cso-body text-sm leading-relaxed">{c.body}</p>
-              </div>
-            ))}
+          {/* Capabilities — flowing list, large index numerals, not cards */}
+          <div className="mb-28">
+            <Reveal>
+              <h2 className="font-bold mb-14" style={{ fontSize: 'clamp(1.75rem, 3vw, 2.5rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+                What it does
+              </h2>
+            </Reveal>
+            <div>
+              {CAPABILITIES.map((c, i) => (
+                <Reveal key={c.n} delay={i * 60}>
+                  <div
+                    className="flex items-baseline gap-8 py-8"
+                    style={{ borderTop: '1px solid var(--border)' }}
+                  >
+                    <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>
+                      {c.n}
+                    </span>
+                    <div>
+                      <h3 className="font-semibold mb-2" style={{ fontSize: '1.25rem', color: 'var(--text-heading)' }}>
+                        {c.title}
+                      </h3>
+                      <p className="text-cso-body leading-relaxed" style={{ fontSize: 15, maxWidth: 560 }}>{c.body}</p>
+                    </div>
+                  </div>
+                </Reveal>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
 
-      {/* ── Steps ── */}
-      <section className="bg-cso-card py-20" style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-cso-heading text-3xl font-bold mb-12 text-center">How to use it</h2>
+          {/* Steps — compact, de-emphasised inline flow, no numbered circles */}
+          <Reveal>
+            <h2 className="font-bold mb-10" style={{ fontSize: 'clamp(1.75rem, 3vw, 2.5rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+              How to use it
+            </h2>
+          </Reveal>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-            {STEPS.map(step => (
-              <div key={step.n}>
-                <div className="font-mono text-xs text-cso-teal mb-3">{step.n}</div>
-                <p className="text-cso-heading text-sm font-semibold mb-1">{step.title}</p>
+            {STEPS.map((step, i) => (
+              <Reveal key={step.n} delay={i * 60}>
+                <div className="font-mono text-xs mb-2" style={{ color: 'var(--accent)' }}>{step.n}</div>
+                <p className="font-semibold mb-1" style={{ fontSize: 15, color: 'var(--text-heading)' }}>{step.title}</p>
                 <p className="text-cso-body text-xs leading-relaxed">{step.body}</p>
-              </div>
+              </Reveal>
             ))}
           </div>
         </div>
       </section>
 
       {/* ── Footer ── */}
-      <footer className="bg-cso-bg py-8">
+      <footer className="bg-cso-bg py-8" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="text-cso-body text-xs">
             CellSelector Omics, University of Bristol &times; AstraZeneca, MSc Group Project 2026

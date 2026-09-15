@@ -48,3 +48,24 @@ body {
   font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
+
+/* Hero scroll cue — a single slow fade pulse, deliberately not the
+   bounce-animation cliché. */
+@keyframes scroll-pulse {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 0.85; }
+}
+.scroll-pulse {
+  animation: scroll-pulse 2.6s ease-in-out infinite;
+}
+
+/* Staged console-log reveal (Search page loading takeover, Part 4) — each
+   line fades/lifts in with a per-line animation-delay set inline, not a
+   single all-at-once appearance. */
+@keyframes console-line-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.console-line {
+  animation: console-line-in 320ms ease both;
+}
