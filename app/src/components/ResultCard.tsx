@@ -7,6 +7,11 @@ interface Props {
   gene: string
   diseaseFilter?: string
   excludeGenes?: string[]
+  // Multi-gene combined search — passed through to /recommend/agentic so
+  // the "Get AI Justification" button produces a joint justification
+  // (see generate_multi_gene_justification) for a multi-gene result,
+  // same as the single-gene path, just with this also set.
+  additionalGenes?: string[]
   onCellLineClick: (cvcl: string) => void
 }
 
@@ -18,6 +23,28 @@ const SECTION_LABELS = [
 
 const MONO_SECTIONS = new Set(['DATA SOURCES', 'LITERATURE CITATIONS', 'LITERATURE', 'DATA CITATIONS'])
 
+// LLM output (Groq/gpt-oss-20b, observed directly) uses Unicode dash/hyphen
+// lookalikes inconsistently and non-deterministically — e.g. "TRADE‑OFFS"
+// with U+2011 NON-BREAKING HYPHEN instead of a plain ASCII "-" — which used
+// to make parseJustification's exact .includes() match silently fail and
+// swallow that section's content into whichever section matched last (see
+// the multi-gene AI-justification investigation: reproduced directly by
+// running this exact function against a real captured response). Not
+// unique to multi-gene — a single-gene response can hit the same thing by
+// chance depending on what that particular LLM call happened to generate.
+// Normalizing BOTH the scanned text and SECTION_LABELS before matching
+// (SECTION_LABELS is already plain ASCII today, so normalizing it is a
+// no-op in practice, but doing it keeps the comparison correct even if a
+// label ever changes) closes this off structurally rather than patching
+// one specific character that happened to be observed.
+// U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN, U+2012 FIGURE DASH,
+// U+2013 EN DASH, U+2014 EM DASH — a contiguous Unicode range, written as
+// escapes (not literal glyphs) so it's unambiguous to read and immune to
+// any editor/encoding mangling of near-identical-looking characters.
+const DASH_VARIANTS = /[‐-—]/g
+const normalizeDashes = (s: string): string => s.replace(DASH_VARIANTS, '-')
+const NORMALIZED_SECTION_LABELS = SECTION_LABELS.map(normalizeDashes)
+
 function parseJustification(text: string): Record<string, string> {
   const sections: Record<string, string> = {}
   const lines = text.split('\n')
@@ -28,7 +55,12 @@ function parseJustification(text: string): Record<string, string> {
     const trimmed = line.trim()
     if (!trimmed) continue
 
-    const matchedLabel = SECTION_LABELS.find(lbl => trimmed.toUpperCase().includes(lbl))
+    const normalizedLine = normalizeDashes(trimmed.toUpperCase())
+    const matchIdx = NORMALIZED_SECTION_LABELS.findIndex(lbl => normalizedLine.includes(lbl))
+    // Original (non-normalized) label is still what gets stored/looked up
+    // as the section key elsewhere (SECTION_LABELS.filter(...), parsed[k],
+    // etc.) — only the MATCHING comparison is dash-tolerant, not the key.
+    const matchedLabel = matchIdx >= 0 ? SECTION_LABELS[matchIdx] : undefined
 
     if (matchedLabel) {
       if (currentLabel) sections[currentLabel] = currentContent.join(' ').trim()
@@ -74,7 +106,7 @@ function Section({ label, count, children }: { label: string; count?: number; ch
   )
 }
 
-export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, onCellLineClick }: Props) {
+export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, additionalGenes, onCellLineClick }: Props) {
   const [aiData, setAiData] = useState<any>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState(false)
@@ -103,6 +135,7 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
     try {
       const data = await api.recommendAgentic({
         gene,
+        additional_genes: additionalGenes,
         disease_filter: diseaseFilter,
         exclude_genes: excludeGenes,
         target_cellosaurus_id: result.cellosaurus_id,
@@ -324,11 +357,11 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
       </Section>
       )}
 
-      {/* AI Justification — single-gene only. Its underlying semantics
-          (justify ONE target gene for this cell line) don't have a clear
-          meaning for a combined multi-gene ranking, so it's hidden rather
-          than justifying an arbitrary one of the queried genes. */}
-      {!isMultiGene && (
+      {/* AI Justification — available for both single- and multi-gene
+          results. For multi-gene, handleAI() passes additionalGenes
+          through to /recommend/agentic, which produces ONE joint
+          justification addressing all queried genes together (see
+          generate_multi_gene_justification) — not per-gene separately. */}
       <div className="border-t border-[#F5F5F7] mt-3 pt-3">
         {!aiData ? (
           <button
@@ -390,7 +423,6 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
           </div>
         )}
       </div>
-      )}
     </div>
   )
 }

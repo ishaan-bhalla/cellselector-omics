@@ -32,6 +32,7 @@ export const api = {
 
   recommendAgentic: (body: {
     gene: string
+    additional_genes?: string[]
     disease_filter?: string
     exclude_genes?: string[]
     target_cellosaurus_id?: string

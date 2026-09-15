@@ -67,6 +67,13 @@ def rank_multi_gene(
         result.attrs["n_excluded_missing_data"]  — int
         result.attrs["total_candidates_per_gene"] — {gene: int}
         result.attrs["genes"]                     — list[str], input order
+        result.attrs["full_scores_by_gene"]       — {gene: full rank() DataFrame},
+            for find_alternatives_multi_gene() to reuse (see its
+            full_scores_by_gene param) instead of a third redundant
+            rescoring pass — ONLY safe to reuse as-is when this call's own
+            disease_filter/lineage_filter/exclude_genes were all None/[];
+            the caller must gate on that itself (same caveat as
+            find_alternatives' full_scores_df).
 
     Returns columns: cellosaurus_id, official_name, disease, lineage,
         combined_score, per_gene_percentiles, per_gene_scores,
@@ -83,6 +90,15 @@ def rank_multi_gene(
     genes = [g for g in genes if not (g in seen or seen.add(g))]
 
     per_gene: dict[str, pd.DataFrame] = {}
+    # Full, untrimmed per-gene rank() output (hpa_score, depmap_score,
+    # protein_score, etc. — everything similarity.build_multi_gene_feature_matrix
+    # needs) — kept separately from per_gene's 5-column combine-only subset
+    # below, so a caller (api/main.py, for find_alternatives_multi_gene) can
+    # reuse it instead of a THIRD redundant full rescoring pass per gene.
+    # Only safe to reuse when disease_filter/lineage_filter/exclude_genes are
+    # all absent — same caveat as find_alternatives' full_scores_df; see this
+    # module's __main__/callers for the gating.
+    full_per_gene: dict[str, pd.DataFrame] = {}
     total_candidates_per_gene: dict[str, int] = {}
     all_seen_lines: set[str] = set()
 
@@ -94,6 +110,7 @@ def rank_multi_gene(
             top_n=None,  # full candidate distribution — see docstring
             exclude_genes=exclude_genes,
         )
+        full_per_gene[gene] = df
         df = df[["cellosaurus_id", "official_name", "disease", "lineage",
                   "final_score"]].copy()
         df["pct"] = df["final_score"].rank(pct=True, method="average")
@@ -155,6 +172,7 @@ def rank_multi_gene(
     result.attrs["n_excluded_missing_data"] = n_excluded_missing_data
     result.attrs["total_candidates_per_gene"] = total_candidates_per_gene
     result.attrs["genes"] = list(genes)
+    result.attrs["full_scores_by_gene"] = full_per_gene
     return result
 
 

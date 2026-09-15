@@ -13,6 +13,52 @@ const LOADING_LINES = [
   '> Analysis complete.',
 ]
 
+// models.classical.weights_learned.VALIDATION_SET's length, confirmed
+// directly against both the local repo and the deployed VM (44, not the
+// panel's old hardcoded "25" — stale since the CIViC-sourced expansion).
+// Not read dynamically from /stats: that endpoint's validation_genes field
+// exists but is sourced from outputs/model_evaluation.json, a frozen
+// snapshot from BEFORE the 44-gene expansion (still reports 25) —
+// regenerating that evaluation artifact is a separate, much larger task,
+// not part of this text-accuracy fix. Hardcoding here is deliberate, not
+// an oversight; update this if VALIDATION_SET's size changes again.
+const VALIDATION_SET_SIZE = 44
+
+// Active Fit Score weight components this panel can describe — deliberately
+// does NOT include "pathway": pathway-coherence scoring (KEGG
+// pathway-neighbor co-expression) was tested via four separate aggregation
+// methods and found not to improve ranking accuracy (post-translational
+// activation mechanisms aren't visible to transcriptional co-expression
+// scoring) — see the methodology note rendered below instead of listing it
+// as an active weighted dimension. A weights_used dict CAN still carry a
+// "pathway" key at 0.0 for some gene classes; omitting it from this table
+// (rather than rendering "(0%)") is deliberate, not a bug.
+const WEIGHT_COMPONENT_INFO: Record<string, { label: string; description: string }> = {
+  rna:         { label: 'RNA Expression',        description: 'transcript abundance across HPA and DepMap' },
+  protein:     { label: 'Protein',                description: 'protein abundance from CCLE proteomics' },
+  quality:     { label: 'Data Quality',           description: 'cross-source agreement and data completeness' },
+  context:     { label: 'Context',                description: 'disease/tissue match to your search filter' },
+  mutation:    { label: 'Mutation Impact',        description: 'damaging-variant status — the primary signal for loss-of-function genes' },
+  copy_number: { label: 'Copy Number',            description: 'amplification status, for amplification-driven oncogenes' },
+  rwr:         { label: 'Graph Centrality (RWR)', description: 'random-walk-with-restart network proximity across the gene/pathway/cell-line knowledge graph' },
+}
+const WEIGHT_COMPONENT_ORDER = ['rna', 'protein', 'quality', 'context', 'mutation', 'copy_number', 'rwr']
+
+// Active components for one gene's weights dict, e.g. "RNA Expression
+// (46%), Protein (8%), ..." — only components actually present with a
+// positive weight, so this is accurate for whichever gene class produced
+// `w` (loss-of-function's mutation-primary vector has no rna/protein/
+// quality/context weight worth mentioning at the same scale but still
+// carries them at small values; amplification-driven genes add
+// copy_number; every class now carries rwr).
+function describeWeights(w: Record<string, number> | undefined): string {
+  if (!w) return ''
+  return WEIGHT_COMPONENT_ORDER
+    .filter(k => (w[k] ?? 0) > 0)
+    .map(k => `${WEIGHT_COMPONENT_INFO[k].label} (${Math.round(w[k] * 100)}%)`)
+    .join(', ')
+}
+
 // Shared gene autocomplete input — used for BOTH the primary gene input and
 // any additional-gene input(s) added via "+ Add another gene" (see Search()
 // below), rather than duplicating the dropdown/filtering logic per input.
@@ -448,57 +494,72 @@ export default function Search() {
         {/* Results */}
         {allResults && !loading && (
           <>
-            {/* Scoring transparency panel — single-gene only. For a
-                multi-gene query, weights_used is {gene: {...weights}}, a
-                shape this panel's text doesn't describe (it explains ONE
-                gene's five-dimension formula), so it's hidden rather than
-                shown wrong. */}
-            {!isMultiGene && (
-              <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
+            {/* Scoring transparency panel — accurate for both single- and
+                multi-gene queries (weights_used is a flat dict for
+                single-gene, {gene: {...weights}} for multi-gene; see
+                describeWeights/WEIGHT_COMPONENT_INFO above). */}
+            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
                 <div className="font-semibold text-black mb-2">
                   How Fit Score is computed
                 </div>
                 <p>
-                  Each cell line is scored across five weighted
-                  dimensions: <strong>RNA Expression</strong>{' '}
-                  ({w?.rna ? (w.rna * 100).toFixed(0) : '?'}%)
-                  measures transcript abundance across HPA and
-                  DepMap; <strong>Protein</strong>{' '}
-                  ({w?.protein ? (w.protein * 100).toFixed(0) : '?'}%) measures
-                  protein abundance from CCLE proteomics;{' '}
-                  <strong>Data Quality</strong>{' '}
-                  ({w?.quality ? (w.quality * 100).toFixed(0) : '?'}%) reflects
+                  Each cell line's Fit Score combines whichever evidence
+                  components are active for the queried gene(s) — the set
+                  and weighting is tuned per gene class (loss-of-function
+                  genes weight <strong>Mutation Impact</strong> heavily;
+                  amplification-driven oncogenes add{' '}
+                  <strong>Copy Number</strong>; other genes weight
+                  expression more heavily), all optimised by maximising
+                  Mean Reciprocal Rank against a {VALIDATION_SET_SIZE}-gene
+                  validated set of gene–cell-line associations from the
+                  literature. <strong>RNA Expression</strong> measures
+                  transcript abundance across HPA and DepMap;{' '}
+                  <strong>Protein</strong> measures protein abundance from
+                  CCLE proteomics; <strong>Data Quality</strong> reflects
                   cross-source agreement and data completeness;{' '}
-                  <strong>Context</strong>{' '}
-                  ({w?.context ? (w.context * 100).toFixed(0) : '?'}%) rewards disease
-                  and tissue match to your search filter;{' '}
-                  <strong>Pathway Activity</strong>{' '}
-                  ({w?.pathway ? (w.pathway * 100).toFixed(0) : '10'}%) measures
-                  how many genes sharing a KEGG pathway with your
-                  target are also expressed in this cell line. GEO
-                  expression acts as a confirmatory bonus
-                  (up to +10%). Weights are optimised by maximising
-                  Mean Reciprocal Rank against 25 validated
-                  gene-cell-line associations from the literature.
+                  <strong>Context</strong> rewards disease/tissue match to
+                  your search filter; <strong>Mutation Impact</strong>{' '}
+                  reflects damaging-variant status; <strong>Copy Number</strong>{' '}
+                  reflects amplification status; and{' '}
+                  <strong>Graph Centrality (RWR)</strong> reflects
+                  random-walk-with-restart network proximity across the
+                  gene/pathway/cell-line knowledge graph. GEO expression
+                  acts as a separate confirmatory bonus (±10%, not one of
+                  the weighted percentages above) when available.
                 </p>
                 <p className="mt-2">
-                  Fit Score combines five evidence dimensions with
-                  weights that are automatically optimized per gene
-                  class using Mean Reciprocal Rank against 25
-                  validated gene-cell-line associations. The system
-                  discovered that pathway activity improves ranking
-                  accuracy for hormone receptors and broadly-expressed
-                  genes, but can introduce noise for receptor tyrosine
-                  kinases where direct expression is already the
-                  decisive signal — so pathway weight is tuned
-                  independently per gene class. The percentages above
-                  reflect the weights actually applied to{' '}
-                  {allResults.query?.gene ?? gene}, a{' '}
-                  {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
-                  gene.
+                  Two methodology notes: pathway-coherence scoring
+                  (checking whether a gene's KEGG pathway-neighbor genes
+                  are also expressed in a cell line) was tested via four
+                  separate methods and found NOT to improve ranking
+                  accuracy — post-translational activation mechanisms
+                  aren't visible to transcriptional co-expression scoring —
+                  so it is not part of the active weighting above.{' '}
+                  <strong>Graph Centrality (RWR)</strong>, a structurally
+                  different approach that captures network proximity
+                  rather than co-expression, WAS found to significantly
+                  improve rankings when combined with direct evidence, and
+                  is active below.
                 </p>
+                {isMultiGene ? (
+                  <div className="mt-2 space-y-1">
+                    {[allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])]
+                      .filter(Boolean)
+                      .map((g: string) => (
+                        <p key={g}>
+                          <strong>{g}</strong>: {describeWeights(w?.[g]) || 'weights unavailable'}
+                        </p>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="mt-2">
+                    The percentages actually applied to{' '}
+                    {allResults.query?.gene ?? gene}, a{' '}
+                    {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
+                    gene: {describeWeights(w)}.
+                  </p>
+                )}
               </div>
-            )}
 
             <div className="flex items-center justify-between mb-6">
               <div>
@@ -551,6 +612,7 @@ export default function Search() {
                   key={r.cellosaurus_id}
                   result={r}
                   gene={allResults.query?.gene ?? gene}
+                  additionalGenes={allResults.query?.additional_genes}
                   diseaseFilter={allResults.query?.disease_filter}
                   excludeGenes={
                     excludeGenes

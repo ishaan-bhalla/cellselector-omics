@@ -287,3 +287,194 @@ def run(
     print(f"[pipeline] Saved → {out_path}")
 
     return output
+
+
+def run_multi_gene(
+    genes: list[str],
+    disease_filter: str | None = None,
+    lineage_filter: str | None = None,
+    top_n: int = 5,
+    target_cellosaurus_id: str | None = None,
+    exclude_genes: list[str] | None = None,
+) -> dict:
+    """
+    Multi-gene analog of run(): combined classical ranking
+    (multi_gene_ranker.rank_multi_gene), combined-feature-vector
+    alternatives (similarity.find_alternatives_multi_gene — see its
+    docstring for the design decision on how the feature vector combines
+    across genes), and ONE joint LLM justification per cell line
+    addressing ALL queried genes together
+    (generator.generate_multi_gene_justification).
+
+    Per-gene evidence retrieval is NOT reimplemented — retrieve_evidence()
+    and format_context() (the same functions run() uses) are called once
+    per gene per cell line, exactly as they already work; only the
+    combining (prompt construction, citation dedup, output shape) is new.
+
+    Scope decision: unlike run(), this does NOT generate a
+    comparative_summary across results — generate_comparison()'s prompt
+    template assumes a single gene's scores; extending it for multi-gene
+    wasn't asked for and isn't done here (comparative_summary is always
+    "" in the returned output). Flagged, not silently dropped.
+
+    Returns the same overall shape run() does, with "genes" (list) in
+    place of "gene" (str), and each result carrying combined_score /
+    per_gene_percentiles / per_gene_scores / evidence_by_gene /
+    verification_notes_by_gene instead of run()'s single-gene score/
+    evidence/verification_notes fields.
+    """
+    from models.classical.multi_gene_ranker import rank_multi_gene
+    from models.classical.similarity import find_alternatives_multi_gene
+    from models.agentic.generator import generate_multi_gene_justification
+
+    print(f"[pipeline] Multi-gene ranking {'+'.join(genes)}"
+          + (f" | disease={disease_filter}" if disease_filter else "")
+          + (f" | lineage={lineage_filter}" if lineage_filter else "")
+          + (f" | exclude={','.join(exclude_genes)}" if exclude_genes else "")
+          + (f" | target={target_cellosaurus_id}" if target_cellosaurus_id else f" | top_n={top_n}"))
+
+    # ── Step 1: Combined classical ranking ────────────────────────────────────
+    rank_top_n = None if target_cellosaurus_id else top_n
+    combined = rank_multi_gene(genes, disease_filter, lineage_filter, exclude_genes, rank_top_n)
+
+    if combined is not None and target_cellosaurus_id:
+        filtered = combined[combined["cellosaurus_id"] == target_cellosaurus_id]
+        if len(filtered) == 0:
+            print(f"[pipeline] target {target_cellosaurus_id} not found in combined results")
+        else:
+            combined = filtered
+
+    if combined is None or len(combined) == 0:
+        print(f"[pipeline] No combined results for genes: {genes}")
+        return {"genes": genes, "results": [], "comparative_summary": ""}
+
+    # ── Combined-feature-vector similarity alternatives (once, for all
+    # ranked lines) — reuses rank_multi_gene's own already-computed
+    # full_scores_by_gene (see its docstring) instead of a third redundant
+    # rescoring pass per gene.
+    print("[pipeline] Computing combined similarity alternatives...")
+    full_scores_by_gene = combined.attrs.get("full_scores_by_gene", {})
+    try:
+        alternatives_map = find_alternatives_multi_gene(
+            genes, combined["cellosaurus_id"].tolist(), MASTER_MERGED, top_k=3,
+            disease_filter=disease_filter, lineage_filter=lineage_filter,
+            full_scores_by_gene=full_scores_by_gene,
+        )
+    except Exception as exc:
+        print(f"  [warning] multi-gene similarity failed: {exc}")
+        alternatives_map = {}
+
+    # ── Steps 2a-c: per-result, per-gene evidence + ONE joint justification ──
+    results: list[dict] = []
+    evidence_list: list[dict] = []  # one {gene: evidence} dict per result
+
+    for rank_pos, row in combined.iterrows():
+        cvcl = row["cellosaurus_id"]
+        name = row.get("official_name") or cvcl
+        combined_score = float(row.get("combined_score") or 0)
+
+        print(f"  [{rank_pos + 1}] {name} ({cvcl}) — combined_score={combined_score:.3f}")
+
+        # 2a: Retrieve evidence PER GENE, reusing retrieve_evidence()
+        # unmodified — each gene needs its OWN scored row (hpa_score/
+        # depmap_score/etc genuinely differ per gene), sourced from
+        # rank_multi_gene's full_scores_by_gene; `row` (the combined
+        # result) is the fallback only for a gene whose full frame is
+        # unavailable, since it still has cellosaurus_id/official_name/
+        # disease/lineage — enough for retrieve_evidence not to crash,
+        # just without that gene's own score columns.
+        evidence_by_gene: dict[str, dict] = {}
+        context_by_gene: dict[str, str] = {}
+        for gene in genes:
+            gene_full = full_scores_by_gene.get(gene)
+            gene_row = row
+            if gene_full is not None:
+                match = gene_full[gene_full["cellosaurus_id"] == cvcl]
+                if len(match) > 0:
+                    gene_row = match.iloc[0]
+            evidence = retrieve_evidence(gene, cvcl, gene_row)
+            evidence_by_gene[gene] = evidence
+            context_by_gene[gene] = format_context(gene, evidence)
+
+        evidence_list.append(evidence_by_gene)
+
+        # 2b/2c: ONE combined prompt, ONE joint justification
+        try:
+            justification = generate_multi_gene_justification(genes, context_by_gene, name)
+        except ConnectionError as exc:
+            print(f"  [warning] {exc}")
+            justification = str(exc)
+        except Exception as exc:
+            print(f"  [warning] LLM error: {exc}")
+            justification = f"LLM unavailable: {exc}"
+
+        # Citations: union across all queried genes' evidence, deduplicated
+        # (by dataset name / PMID) before handing to
+        # add_citations_to_justification() UNMODIFIED — it just needs flat
+        # lists, same as the single-gene path.
+        all_dataset_cites: list[dict] = []
+        seen_ds: set[str] = set()
+        all_papers: list[dict] = []
+        seen_pmids: set[str] = set()
+        for gene in genes:
+            ev = evidence_by_gene[gene]
+            for c in ev.get("dataset_citations", []):
+                if c["name"] not in seen_ds:
+                    seen_ds.add(c["name"])
+                    all_dataset_cites.append(c)
+            for p in ev.get("literature", []):
+                if p["pmid"] not in seen_pmids:
+                    seen_pmids.add(p["pmid"])
+                    all_papers.append(p)
+
+        justification = add_citations_to_justification(
+            justification, all_dataset_cites, all_papers,
+        )
+
+        results.append({
+            "rank":                 rank_pos + 1,
+            "cellosaurus_id":       cvcl,
+            "official_name":        name,
+            "combined_score":       combined_score,
+            "per_gene_percentiles": row.get("per_gene_percentiles"),
+            "per_gene_scores":      row.get("per_gene_scores"),
+            "evidence_by_gene":     evidence_by_gene,
+            "justification":        justification,
+            # Per-gene, not merged into one list — a caller can verify
+            # EACH gene's mandatory mutation-status/missing-sources
+            # statement was actually addressed, not just assume the LLM
+            # covered both from a single blended list (see STEP 4).
+            "verification_notes_by_gene": {
+                gene: _verification_notes(evidence_by_gene[gene]) for gene in genes
+            },
+            "alternatives": alternatives_map.get(cvcl, []),
+        })
+
+    # ── Step 3: comparative summary — NOT generated for multi-gene (see
+    # docstring's scope decision). Always empty here, not silently omitted.
+    comparative_summary = ""
+
+    # ── Step 4: Save output ───────────────────────────────────────────────────
+    output = {
+        "genes": genes,
+        "query": {
+            "disease_filter":        disease_filter,
+            "lineage_filter":        lineage_filter,
+            "top_n":                 top_n,
+            "target_cellosaurus_id": target_cellosaurus_id,
+            "exclude_genes":         exclude_genes or [],
+        },
+        "results":            results,
+        "comparative_summary": comparative_summary,
+    }
+
+    genes_key = "-".join(genes)
+    excl_key = "-".join(sorted(exclude_genes)) if exclude_genes else ""
+    query_key = f"{genes_key}_{disease_filter}_{lineage_filter}_{target_cellosaurus_id}_{excl_key}"
+    query_hash = hashlib.md5(query_key.encode()).hexdigest()[:8]
+    out_path = OUTPUTS_DIR / f"agentic_results_multi_{genes_key}_{query_hash}.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    print(f"[pipeline] Saved → {out_path}")
+
+    return output
