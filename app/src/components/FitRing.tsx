@@ -29,6 +29,16 @@ export default function FitRing({ score, size = 88, label = 'FIT SCORE', dim = f
   const c = 2 * Math.PI * r
   const dash = (pct / 100) * c
 
+  // Part 2's instrument-readout treatment: a fixed-width inset "LCD"
+  // plate behind the numeral (var(--bg) — a real existing token, reads as
+  // subtly recessed against the card's var(--bg-card) in both themes, not
+  // a new colour), sized for 3 monospace digits regardless of whether pct
+  // is actually 1, 2, or 3 digits, so the plate never shifts/resizes
+  // between result cards.
+  const numeralSize = size * 0.32
+  const plateW = numeralSize * 0.62 * 3 + numeralSize * 0.4
+  const plateH = numeralSize * 1.3
+
   return (
     <div
       className="flex flex-col items-center justify-center flex-shrink-0"
@@ -48,12 +58,18 @@ export default function FitRing({ score, size = 88, label = 'FIT SCORE', dim = f
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
           style={{ transition: 'stroke-dasharray 0.5s ease, stroke 200ms ease' }}
         />
+        <rect
+          x={size / 2 - plateW / 2} y={size / 2 - plateH / 2}
+          width={plateW} height={plateH} rx={3}
+          fill="var(--bg)"
+        />
         <text
           x="50%" y="50%"
           textAnchor="middle" dominantBaseline="central"
           fontFamily="'IBM Plex Mono', monospace"
-          fontSize={size * 0.32}
+          fontSize={numeralSize}
           fontWeight={700}
+          letterSpacing={numeralSize * 0.06}
           fill="var(--text-heading)"
         >
           {pct}

@@ -70,32 +70,25 @@ body {
   animation: console-line-in 320ms ease both;
 }
 
-/* Part 5's hard binary contrast device: non-top results render their
-   FitRing (or, in COMPACT mode, their fit-percentage text) in
-   --muted-state via the `dim` prop; this rule restores full --accent
-   contrast the instant that specific card is hovered or focused, then
-   reverts when it isn't — no JS state needed, :hover/:focus already
-   scope to the one card. !important is required here because the ring's
-   colour is set via an SVG presentation attribute (stroke=), which sits
-   below both inline style and stylesheet rules in the cascade — without
-   it this rule would never win. */
+/* The hard binary contrast device: non-top results render their FitRing
+   stroke, COMPACT's fit-percentage text, or (now) a microplate well's
+   border in --muted-state via a `dim` prop / conditional; these rules
+   restore full --accent contrast the instant that specific element is
+   hovered or focused, then revert when it isn't — no JS state needed.
+   Two forms are needed: an ANCESTOR form (.result-card-wrap:hover
+   .fitring-fill) for FitRing/ResultCard and COMPACT, where the hoverable
+   card and the coloured element are different nodes; and a SELF form
+   (.fitring-fill:hover) for the microplate well, where the well itself is
+   both the interactive element and the bordered element. !important is
+   required because the ring's colour is set via an SVG presentation
+   attribute (stroke=), which sits below both inline style and stylesheet
+   rules in the cascade — without it these rules would never win. */
 .result-card-wrap:hover .fitring-fill,
 .result-card-wrap:focus .fitring-fill,
-.result-card-wrap:focus-within .fitring-fill {
+.result-card-wrap:focus-within .fitring-fill,
+.fitring-fill:hover,
+.fitring-fill:focus {
   stroke: var(--accent) !important;
   color: var(--accent) !important;
-}
-
-/* Part 4 — GRID view, edge-to-edge with a single shared hairline between
-   cells instead of each card framing itself with its own border+gap.
-   border-bottom always; border-right only once the sm: breakpoint's
-   2-column layout is active (matches Search.tsx's `sm:grid-cols-2`) —
-   below that every cell is full-width and a right border would be wrong. */
-.results-grid > .grid-cell {
-  border-bottom: 1px solid var(--border);
-}
-@media (min-width: 640px) {
-  .results-grid > .grid-cell:nth-child(odd) {
-    border-right: 1px solid var(--border);
-  }
+  border-color: var(--accent) !important;
 }

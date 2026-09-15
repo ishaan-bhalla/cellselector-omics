@@ -1,5 +1,6 @@
 import { METRIC_ICONS } from './icons/MetricIcons'
 import { METRIC_INFO } from './MetricRow'
+import InstrumentReadout from './InstrumentReadout'
 import { getScorePct, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
 
 interface Props {
@@ -50,15 +51,17 @@ export default function ResultCardCompact({ result, diseaseFilter, lineageFilter
       </span>
 
       {/* Part 5's hard binary contrast — only the top-ranked row keeps the
-          accent fit-%; every other row is muted-state (fitring-fill class
-          so index.css's hover/focus rule restores full accent while this
-          specific row is hovered or focused). */}
-      <span
-        className="fitring-fill font-mono text-sm font-semibold w-11 flex-shrink-0"
-        style={{ color: isTop ? 'var(--accent)' : 'var(--muted-state)' }}
-      >
-        {pct}%
-      </span>
+          accent fit-%; every other row is muted-state (fillMarker gives it
+          the fitring-fill class so index.css's hover/focus rule restores
+          full accent while this specific row is hovered or focused). Part
+          2's instrument-readout styling (fixed-width mono, inset plate). */}
+      <InstrumentReadout
+        value={`${pct}%`}
+        color={isTop ? 'var(--accent)' : 'var(--muted-state)'}
+        fillMarker
+        size="sm"
+        className="flex-shrink-0"
+      />
 
       <span className="flex-1 min-w-0 truncate text-sm font-semibold" style={{ color: 'var(--text-heading)' }}>
         {result.official_name}

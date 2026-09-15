@@ -1,105 +1,65 @@
-import FitRing from './FitRing'
-import MetricRow from './MetricRow'
-import LabelValueRow from './LabelValueRow'
-import { getScorePct, getSources, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
+import InstrumentReadout from './InstrumentReadout'
+import { getScorePct } from '../utils/resultFields'
 
 interface Props {
   result: any
-  diseaseFilter?: string
-  lineageFilter?: string
   onCellLineClick: (cvcl: string) => void
 }
 
-// GRID view — corrected direction: edge-to-edge, zero-gutter (Part 4).
-// This card itself carries NO border and NO rounding any more — the
-// parent grid in Search.tsx uses Tailwind's `divide-x divide-y` to draw
-// ONE shared hairline between cells, not each card framing itself. Still
-// carries the Part 1 labelling fix (GENE CLASS / GENE ROLE, metric
-// tooltips, CONTEXT n/a) in full, but drops the collapsible Alternatives /
-// Score breakdown / AI Justification depth — click through to the cell
-// line detail panel (same as LIST's name click) for that. Trimmed to 4
-// evidence metrics (RNA/PROTEIN/QUALITY/CONTEXT, dropping PATHWAY/RWR) to
-// actually earn "compact," not just relabelled.
-export default function ResultCardGrid({ result, diseaseFilter, lineageFilter, onCellLineClick }: Props) {
-  const isMultiGene = isMultiGeneResult(result)
+// GRID view — corrected direction #2: a 96-well microplate, not an
+// edge-to-edge card panel (that was the prior task's Part 4; this
+// replaces it for GRID specifically — LIST and COMPACT are untouched).
+// Each well is a genuine circle (aspect-square + rounded-full, not a
+// rounded rectangle), holding exactly three things per the spec: the
+// rank (small, top-right corner), the cell line name (centred, truncated
+// to keep clear of the circle's curve), and the Fit Score numeral in
+// Part 2's instrument-readout styling.
+//
+// The well's BORDER carries the hard-binary top-result signal (retargeted
+// from FitRing's stroke, same `fitring-fill` mechanism/CSS rule — see
+// index.css) — accent for rank 1, muted-state otherwise, full accent
+// restored on hover/focus of that specific well. Because the well itself
+// is the interactive element (not a separate ancestor wrapping a nested
+// coloured node, unlike FitRing/ResultCard), it relies on the SELF-hover
+// form of that rule (`.fitring-fill:hover`), not the ancestor form.
+//
+// diseaseFilter/lineageFilter/gene_class/gene_role are deliberately NOT
+// shown here — this task's well spec lists exactly three contents (rank,
+// name, Fit Score), and a well this small has no real room for a fourth.
+// LIST and COMPACT still carry the full GENE CLASS/GENE ROLE/CONTEXT n/a
+// treatment; clicking a well opens the same cell-line detail panel
+// (SlideOver) as every other view for that deeper information.
+export default function ResultCardGrid({ result, onCellLineClick }: Props) {
   const scorePct = getScorePct(result)
-  const hasFilter = computeHasContextFilter(diseaseFilter, lineageFilter)
-  const sources = getSources(result)
+  const pct = Math.round(scorePct * 100)
   const isTop = result.rank === 1
 
   return (
-    <div className="result-card-wrap bg-cso-card p-5">
-      <div className="flex items-start justify-between mb-3 gap-3">
-        <div className="flex items-start gap-2.5 flex-1 min-w-0">
-          <span
-            className="font-mono leading-none flex-shrink-0"
-            style={{ fontSize: '1.5rem', fontWeight: 300, color: 'var(--text-body)', opacity: 0.6 }}
-          >
-            {String(result.rank).padStart(2, '0')}
-          </span>
-          <div className="min-w-0 pt-0.5">
-            <button
-              onClick={() => onCellLineClick(result.cellosaurus_id)}
-              className="hover:underline transition-colors text-left truncate block w-full"
-              style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}
-            >
-              {result.official_name}
-            </button>
-            <div className="text-cso-body font-mono text-[11px] mt-0.5">{result.cellosaurus_id}</div>
-          </div>
-        </div>
-        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT'} size={56} dim={!isTop} />
-      </div>
+    <button
+      onClick={() => onCellLineClick(result.cellosaurus_id)}
+      className="fitring-fill w-full aspect-square rounded-full flex flex-col items-center justify-center relative"
+      style={{
+        background: 'var(--bg-card)',
+        border: `2px solid ${isTop ? 'var(--accent)' : 'var(--muted-state)'}`,
+        transition: 'border-color 200ms ease',
+      }}
+      title={`${result.official_name} — rank ${result.rank}`}
+    >
+      <span
+        className="absolute font-mono"
+        style={{ top: '14%', right: '16%', fontSize: 9, color: 'var(--text-body)', opacity: 0.6 }}
+      >
+        {String(result.rank).padStart(2, '0')}
+      </span>
 
-      {isMultiGene ? (
-        <div className="text-xs text-cso-body font-mono mb-2">
-          {Object.entries(result.per_gene_percentiles as Record<string, number>)
-            .map(([g, pct]) => `${g}: ${Math.round(pct * 100)}%ile`)
-            .join(', ')}
-        </div>
-      ) : (
-        <>
-          {(result.gene_class || result.gene_role) && (
-            <div className="mb-2">
-              {result.gene_class && (
-                <LabelValueRow
-                  label="Class"
-                  value={(result.gene_class as string).replace(/_/g, '-')}
-                  explanation="Determines which evidence types are weighted most heavily for this gene."
-                />
-              )}
-              {result.gene_role && (
-                <LabelValueRow
-                  label="Role"
-                  value={result.gene_role}
-                  explanation="The gene's biological function, for context."
-                />
-              )}
-            </div>
-          )}
+      <span
+        className="truncate font-semibold px-1"
+        style={{ fontSize: 10, color: 'var(--text-heading)', maxWidth: '64%', textAlign: 'center', marginBottom: 4 }}
+      >
+        {result.official_name}
+      </span>
 
-          <div className="mb-2">
-            <MetricRow metric="rna"     value={result.rna_score ?? 0} />
-            <MetricRow metric="protein" value={result.protein_score ?? 0} />
-            <MetricRow metric="quality" value={result.quality_score ?? 0} />
-            <MetricRow
-              metric="context"
-              value={hasFilter ? (result.context_score ?? 0) : null}
-              tooltip={hasFilter ? undefined : 'No disease or tissue filter was applied to this search'}
-            />
-          </div>
-
-          {sources.length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-1">
-              {sources.map(s => (
-                <span key={s} className="text-[10px] border border-cso-border text-cso-body px-1.5 py-0.5 rounded-full">
-                  {s}
-                </span>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+      <InstrumentReadout value={`${pct}%`} color="var(--text-heading)" size="sm" />
+    </button>
   )
 }

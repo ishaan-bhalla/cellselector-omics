@@ -727,18 +727,18 @@ export default function Search({ viewMode }: Props) {
             )}
 
             {viewMode === 'grid' && (
-              // Edge-to-edge, zero-gutter (Part 4) — one outer frame
-              // border, no gap between cells, a single shared hairline
-              // drawn by the .results-grid/.grid-cell CSS in index.css
-              // (border-bottom always, border-right once 2 columns are
-              // active) rather than each card framing itself.
-              <div className="results-grid grid grid-cols-1 sm:grid-cols-2" style={{ border: '1px solid var(--border)' }}>
+              // 96-well microplate (corrected direction #2, replacing the
+              // prior edge-to-edge panel for GRID specifically) — a real,
+              // visible gap between circular wells, not the gutter-less
+              // hairline grid used elsewhere; that's a deliberate
+              // difference, not an inconsistency. Column count scales
+              // with viewport toward the ~8-column proportion of a real
+              // 96-well plate, fewer columns on narrower screens.
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3">
                 {(displayedResults!.results as any[]).map((r: any, i: number) => (
-                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 8) * 30} className="grid-cell">
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 12) * 20}>
                     <ResultCardGrid
                       result={r}
-                      diseaseFilter={allResults.query?.disease_filter}
-                      lineageFilter={allResults.query?.lineage_filter}
                       onCellLineClick={setSelectedCVCL}
                     />
                   </Reveal>
