@@ -59,9 +59,11 @@ body {
   animation: scroll-pulse 2.6s ease-in-out infinite;
 }
 
-/* Staged console-log reveal (Search page loading takeover, Part 4) — each
-   line fades/lifts in with a per-line animation-delay set inline, not a
-   single all-at-once appearance. */
+/* Search page loading takeover: only one line is ever rendered (see
+   Search.tsx's `key={loadLine}`), so each new line fades/lifts into the
+   SAME position as the last one it replaces, rather than the old
+   behaviour of all lines accumulating and staying stacked below each
+   other. */
 @keyframes console-line-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }

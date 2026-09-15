@@ -37,7 +37,7 @@ export default function About() {
               A multi-omics cell<br />line recommender
             </h1>
             <p className="text-cso-body leading-relaxed mb-5" style={{ fontSize: 19, maxWidth: 640 }}>
-              CellSelector Omics ranks candidate human cell lines for a gene of
+              CellSelector Omics ranks candidate cell lines for a gene of
               interest by combining RNA expression, protein abundance, CRISPR
               dependency, mutation status and knowledge-graph network
               centrality into a single, evidence-backed Fit Score.
@@ -83,7 +83,7 @@ export default function About() {
               Scope
             </h2>
             <p className="text-cso-body leading-relaxed mb-4" style={{ fontSize: 16, maxWidth: 640 }}>
-              The tool covers a fixed panel of human cell lines drawn from
+              The tool covers a fixed panel of cell lines drawn from
               DepMap, HPA, GEO and CCLE, mapped to Cellosaurus identifiers so
               every result is traceable back to a canonical, citable record.
               Scoring weights are class-adaptive rather than gene-specific,

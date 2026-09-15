@@ -4,7 +4,7 @@ const SOURCES = [
   {
     key: 'HPA',
     name: 'Human Protein Atlas',
-    body: 'RNA expression (nTPM) across the human cell line panel, used as one of two primary transcript-abundance signals.',
+    body: 'RNA expression (nTPM) across the cell line panel, used as one of two primary transcript-abundance signals.',
   },
   {
     key: 'DepMap',

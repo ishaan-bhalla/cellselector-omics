@@ -7,17 +7,8 @@ import SlideOver from '../components/SlideOver'
 import Reveal from '../components/Reveal'
 import AutocompleteInput from '../components/AutocompleteInput'
 import type { ViewMode } from '../utils/viewMode'
-import { loadSearchForm, saveSearchForm, loadSearchResults, saveSearchResults } from '../utils/searchState'
-
-const LOADING_LINES = [
-  'Resolving gene symbol',
-  'Computing RNA expression scores',
-  'Applying protein expression weights',
-  'Running GEO cross-validation',
-  'Ranking 2,076 cell lines',
-  'Computing similarity alternatives',
-  'Analysis complete',
-]
+import { loadSearchForm, saveSearchForm } from '../utils/searchState'
+import { useSearch, LOADING_LINES } from '../context/SearchContext'
 
 // Safety cap on multi-gene search size, mirroring api/models.py's
 // MAX_ADDITIONAL_GENES. NOT a permanent feature limit — the parallelized
@@ -55,11 +46,21 @@ export default function Search({ viewMode }: Props) {
   // against a stale topN: 50 restored from a session persisted before
   // this change, which the <select> below no longer offers as an option.
   const [topN, setTopN] = useState(() => Math.min(loadSearchForm().topN ?? 10, 20))
-  const [allResults, setAllResults] = useState<any>(() => loadSearchResults())
-  const [loading, setLoading] = useState(false)
-  const [loadLine, setLoadLine] = useState(0)
+  // Item 3: loading/results/error/loadLine now live in SearchContext (see
+  // App.tsx), not local state — that's what makes an in-flight search
+  // survive navigating away from this page and back, instead of being
+  // orphaned when this component unmounts. `results` is aliased to
+  // `allResults` so the rest of this file (written before this change)
+  // needs no further renaming below.
+  const { classical, runClassicalSearch } = useSearch()
+  const { loading, error: fetchError, results: allResults, loadLine } = classical
+  // Pre-submit validation (e.g. "can't search for and exclude the same
+  // gene") happens here, BEFORE runClassicalSearch is even called, so it
+  // can't reuse the context's post-fetch `error` — kept as its own local
+  // state and combined with fetchError only when rendering the banner.
+  const [formError, setFormError] = useState<string | null>(null)
+  const error = formError ?? fetchError
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   // Full gene list, fetched once on mount — see the useEffect below.
   // Client-side filtering of this replaces the old per-keystroke
   // /genes/search autocomplete entirely (eliminates both the backend load
@@ -129,9 +130,11 @@ export default function Search({ viewMode }: Props) {
     saveSearchForm({ gene, additionalGenes, diseaseFilter, excludeGenes, topN })
   }, [gene, additionalGenes, diseaseFilter, excludeGenes, topN])
 
-  useEffect(() => {
-    saveSearchResults(allResults)
-  }, [allResults])
+  // Results persistence (sessionStorage) now lives in SearchProvider —
+  // see the module docstring on SearchContext.tsx for why this doesn't
+  // conflict with the saveSearchForm effect above (different concern:
+  // what you're about to search, vs. what you last searched and got
+  // back).
 
   useEffect(() => {
     if (loading) {
@@ -196,62 +199,38 @@ export default function Search({ viewMode }: Props) {
     return () => document.removeEventListener('mousedown', handler)
   }, [exportOpen])
 
-  useEffect(() => {
-    if (!loading) { setLoadLine(0); return }
-    const id = setInterval(() => setLoadLine(l => Math.min(l + 1, LOADING_LINES.length - 1)), 650)
-    return () => clearInterval(id)
-  }, [loading])
-
-  const handleSearch = async () => {
+  // Item 3: the actual fetch now lives in SearchContext's
+  // runClassicalSearch — this just does pre-submit validation, then
+  // freezes the current form values into the call (matching how
+  // allResults.query already reflects the frozen query a response came
+  // back with, elsewhere in this file — editing the form again while a
+  // search is in flight correctly does NOT retroactively change what's
+  // being fetched).
+  const handleSearch = () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
 
-    // excludeGenes is now a real string[] (Item 1's chip picker), so no
-    // parsing is needed here any more — was previously split from a
-    // comma-separated free-text field.
     if (excludeGenes.includes(g)) {
-      setError(`Cannot search for ${g} and exclude it at the same time.`)
+      setFormError(`Cannot search for ${g} and exclude it at the same time.`)
       return
     }
+    setFormError(null)
 
-    setLoading(true); setAllResults(null); setError(null)
-    try {
-      const diseaseFilterVal = diseaseFilter.trim() || undefined
-      // Pathway-Connected Recommendations (the section that used to
-      // render below the main results, fetched here via
-      // api.cellLinesViaPathway alongside the main search) was removed
-      // per user testing feedback (Item 7) — rigorous evaluation
-      // established pathway-coherence scoring doesn't earn a dedicated,
-      // prominent UI section (see ranker.py / pathway_scorer.py; the
-      // backend scoring itself is UNTOUCHED, still correctly weighted for
-      // loss-of-function genes — this was a UI declutter only). The
-      // second Promise.all leg and pathwayResults state are gone with it.
-      const r = await api.recommendClassical({
-        gene: g,
-        // additionalGenes is always a real array (possibly empty) — sent
-        // as-is, matching what additional_genes: list[str] =
-        // Field(default_factory=list) on the backend expects. An empty
-        // array here takes the EXACT SAME code path as before this
-        // change (see api/main.py: `if body.additional_genes:` is False
-        // for []), so a search with nothing added is unaffected.
-        additional_genes: additionalGenes,
-        disease_filter: diseaseFilterVal,
-        // lineage_filter removed (Item 4) — Tissue Type no longer
-        // collected, so nothing is sent for it any more.
-        exclude_genes: excludeGenes.length ? excludeGenes : undefined,
-        // Reduced from 50 to cut backend work — see the timing
-        // investigation report. The dropdown no longer offers "Top 50"
-        // at all (Item 9), so this now always matches the largest
-        // selectable option.
-        top_n: 20,
-      })
-      if (r.detail) throw new Error(r.detail)
-      setAllResults(r)
-    } catch (e: any) {
-      setError(e?.message ?? 'Request failed. Is the API running on port 8001?')
-    } finally {
-      setLoading(false)
-    }
+    // Pathway-Connected Recommendations (the section that used to render
+    // below the main results, fetched alongside the main search) was
+    // removed per user testing feedback (Item 7) — rigorous evaluation
+    // established pathway-coherence scoring doesn't earn a dedicated,
+    // prominent UI section (see ranker.py / pathway_scorer.py; the
+    // backend scoring itself is UNTOUCHED, still correctly weighted for
+    // loss-of-function genes — this was a UI declutter only).
+    runClassicalSearch({
+      gene: g,
+      additionalGenes,
+      diseaseFilter: diseaseFilter.trim() || undefined,
+      // lineage_filter removed (Item 4 of the prior task) — Tissue Type
+      // no longer collected, so nothing is sent for it any more.
+      excludeGenes,
+    })
   }
 
   const exportJSON = () => {
@@ -515,13 +494,20 @@ export default function Search({ viewMode }: Props) {
         </div>
       </div>
 
-      {/* Search-execution takeover (Part 4) — a genuine full-width moment
-          while a search runs, not a small box below the form: expands to
-          become the visual focus, each console line stages in after the
-          last (see LOADING_LINES.slice + the .console-line animation),
-          then collapses smoothly (maxHeight/opacity transition, kept
-          mounted an extra ~420ms via takeoverVisible so the collapse is
-          visible rather than an instant unmount) into the results below. */}
+      {/* Search-execution takeover — a genuine full-width moment while a
+          search runs, not a small box below the form: expands to become
+          the visual focus, then collapses smoothly (maxHeight/opacity
+          transition, kept mounted an extra ~420ms via takeoverVisible so
+          the collapse is visible rather than an instant unmount) into the
+          results below. Item 4: only ONE line is ever rendered — keyed by
+          loadLine, so each new line is a fresh element at the exact same
+          position (not appended below the last), triggering the
+          .console-line fade-up-in keyframe on entry; the previous line is
+          simply replaced, not left stacked. "Analysis complete" is gone
+          as a displayed line entirely — seeing the results IS the
+          completion signal; the sequence just holds on the last real
+          line (LOADING_LINES has no completion line any more) until the
+          takeover collapses on its own. */}
       {takeoverVisible && (
         <div
           className="w-full overflow-hidden"
@@ -533,26 +519,15 @@ export default function Search({ viewMode }: Props) {
           }}
         >
           <div className="max-w-4xl mx-auto px-6" style={{ paddingTop: 96, paddingBottom: 96 }}>
-            <div className="font-mono" style={{ fontSize: 'clamp(1rem, 2.4vw, 1.65rem)' }}>
-              {LOADING_LINES.slice(0, loadLine + 1).map((line, i) => {
-                const isCurrent = i === loadLine
-                return (
-                  <div
-                    key={i}
-                    className="console-line"
-                    style={{
-                      marginBottom: 14,
-                      color: isCurrent ? 'var(--text-heading)' : 'var(--text-body)',
-                      opacity: isCurrent ? 1 : 0.45,
-                    }}
-                  >
-                    {line}
-                    {isCurrent && i < LOADING_LINES.length - 1 && (
-                      <span className="animate-pulse ml-1" style={{ color: 'var(--text-heading)' }}>_</span>
-                    )}
-                  </div>
-                )
-              })}
+            <div
+              key={loadLine}
+              className="console-line font-mono"
+              style={{ fontSize: 'clamp(1rem, 2.4vw, 1.65rem)', color: 'var(--text-heading)' }}
+            >
+              {LOADING_LINES[loadLine]}
+              {loadLine < LOADING_LINES.length - 1 && (
+                <span className="animate-pulse ml-1" style={{ color: 'var(--text-heading)' }}>_</span>
+              )}
             </div>
           </div>
         </div>

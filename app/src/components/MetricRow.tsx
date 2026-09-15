@@ -1,4 +1,5 @@
 import { METRIC_ICONS } from './icons/MetricIcons'
+import HoverPopover from './HoverPopover'
 
 export const METRIC_INFO: Record<string, { label: string; description: string }> = {
   rna:     { label: 'RNA',     description: 'Expression level across HPA and DepMap' },
@@ -23,6 +24,15 @@ interface Props {
   tooltip?: string
 }
 
+// Item 2 re-verification: this previously used a native `title` attribute
+// for the hover explanation — reported by the user as not reliably
+// appearing (native title tooltips have a real, documented ~1s+ trigger
+// delay and inconsistent behaviour across browsers, unlike a custom
+// popover). Switched to the same HoverPopover component already proven
+// working for the Fit Score explanation, rather than a second tooltip
+// mechanism. align="left" + className="flex w-full" so the popover
+// anchors near the icon/label (not centred under the whole row) and the
+// hover target covers the entire row, not just its intrinsic width.
 export default function MetricRow({ metric, value, tooltip }: Props) {
   const info = METRIC_INFO[metric]
   const Icon = METRIC_ICONS[metric]
@@ -31,33 +41,30 @@ export default function MetricRow({ metric, value, tooltip }: Props) {
   const pct = Math.round(clamped * 100)
 
   return (
-    <div
-      className="flex items-center gap-2.5 py-1"
-      title={tooltip ?? info.description}
-    >
-      <span className="text-cso-body flex-shrink-0">
-        <Icon />
-      </span>
-      <span className="text-[11px] uppercase tracking-[0.08em] text-cso-body w-16 flex-shrink-0">
-        {info.label}
-      </span>
-      {isNA ? (
-        <>
-          <div className="flex-1" />
-          <span className="font-mono text-xs text-cso-muted w-12 text-right flex-shrink-0">n/a</span>
-        </>
-      ) : (
-        <>
-          <div className="flex-1 h-1 rounded-sm overflow-hidden" style={{ background: 'var(--border)' }}>
-            <div
-              style={{ width: `${pct}%`, background: barColor(clamped), height: '100%', transition: 'width 0.4s ease' }}
-            />
-          </div>
-          <span className="font-mono text-xs text-cso-heading w-12 text-right flex-shrink-0">
-            {clamped.toFixed(2)}
-          </span>
-        </>
-      )}
-    </div>
+    <HoverPopover content={tooltip ?? info.description} align="left" className="flex w-full">
+      <div className="flex items-center gap-2.5 py-1 w-full">
+        <span className="text-cso-body flex-shrink-0"><Icon /></span>
+        <span className="text-[11px] uppercase tracking-[0.08em] text-cso-body w-16 flex-shrink-0">
+          {info.label}
+        </span>
+        {isNA ? (
+          <>
+            <div className="flex-1" />
+            <span className="font-mono text-xs text-cso-muted w-12 text-right flex-shrink-0">n/a</span>
+          </>
+        ) : (
+          <>
+            <div className="flex-1 h-1 rounded-sm overflow-hidden" style={{ background: 'var(--border)' }}>
+              <div
+                style={{ width: `${pct}%`, background: barColor(clamped), height: '100%', transition: 'width 0.4s ease' }}
+              />
+            </div>
+            <span className="font-mono text-xs text-cso-heading w-12 text-right flex-shrink-0">
+              {clamped.toFixed(2)}
+            </span>
+          </>
+        )}
+      </div>
+    </HoverPopover>
   )
 }

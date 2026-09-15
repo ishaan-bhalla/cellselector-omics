@@ -129,7 +129,7 @@ export default function Home() {
           </h1>
 
           <p style={{ color: 'var(--text-body)', fontSize: 18, lineHeight: 1.6, maxWidth: 460, margin: '32px 0 0' }}>
-            Multi-omics recommendation across 2,076 human cell lines,
+            Multi-omics recommendation across 2,076 cell lines,
             evidence-backed and citable.
           </p>
 

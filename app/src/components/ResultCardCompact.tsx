@@ -24,15 +24,36 @@ interface Props {
 // Both keep their hover-explanation tooltip; gene class keeps its own —
 // condensed onto one line, but the Part 1 labelling fix isn't dropped
 // here, just laid out differently than LIST/GRID's two-line rows.
+//
+// Item 2 re-verification: previously a native `title` attribute, same
+// user-reported unreliability as MetricRow's. Can't nest the HoverPopover
+// COMPONENT here (this whole row is already one <button> — see the Fit
+// Score popover below, which hit the same invalid-interactive-nesting
+// issue and works around it the same way): local hover state + an
+// absolutely-positioned popover, not a second focusable wrapper.
 function CompactMetric({ metric, value, tooltip }: { metric: 'rna' | 'context'; value: number | null; tooltip?: string }) {
   const info = METRIC_INFO[metric]
   const Icon = METRIC_ICONS[metric]
+  const [hovered, setHovered] = useState(false)
   return (
-    <span className="flex items-center gap-1 flex-shrink-0" title={tooltip ?? info.description}>
+    <span
+      className="relative flex items-center gap-1 flex-shrink-0"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <span className="text-cso-body"><Icon /></span>
       <span className="font-mono text-xs text-cso-heading w-9">
         {value === null ? 'n/a' : value.toFixed(2)}
       </span>
+      {hovered && (
+        <div
+          role="tooltip"
+          className="absolute z-40 bg-cso-card border border-[var(--border)] rounded p-2.5 text-xs text-[var(--text-body)] leading-relaxed text-left"
+          style={{ width: 200, left: 0, top: '100%', marginTop: 4, pointerEvents: 'none' }}
+        >
+          {tooltip ?? info.description}
+        </div>
+      )}
     </span>
   )
 }

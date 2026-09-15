@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { api } from '../api/client'
 import FitRing from './FitRing'
 import MetricRow from './MetricRow'
 import LabelValueRow from './LabelValueRow'
@@ -7,6 +6,7 @@ import HoverPopover from './HoverPopover'
 import FitScoreExplanation from './FitScoreExplanation'
 import { renderBold } from '../utils/renderBold'
 import { getScorePct, getSources, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
+import { useSearch } from '../context/SearchContext'
 
 interface Props {
   result: any
@@ -114,9 +114,16 @@ function Section({ label, count, children }: { label: string; count?: number; ch
 }
 
 export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, additionalGenes, weightsUsed, onCellLineClick }: Props) {
-  const [aiData, setAiData] = useState<any>(null)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiError, setAiError] = useState(false)
+  // Item 3: AI-justification state (per cell line) now lives in
+  // SearchContext, keyed by cellosaurus_id, instead of local state here —
+  // so clicking "Get AI Justification" (which can take well over a
+  // minute for the agentic path) and navigating away no longer orphans
+  // the result; it lands in state that outlives this component.
+  const { agenticByCellLine, runAgenticJustification } = useSearch()
+  const ai = agenticByCellLine[result.cellosaurus_id]
+  const aiData = ai?.data ?? null
+  const aiLoading = ai?.loading ?? false
+  const aiError = ai?.error ?? false
 
   const isTop = result.rank === 1
   // Multi-gene combined-search results (see multi_gene_ranker.rank_multi_gene
@@ -132,24 +139,14 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
   const hasContextFilter = computeHasContextFilter(diseaseFilter)
   const sources = getSources(result)
 
-  const handleAI = async () => {
-    setAiLoading(true)
-    setAiError(false)
-    try {
-      const data = await api.recommendAgentic({
-        gene,
-        additional_genes: additionalGenes,
-        disease_filter: diseaseFilter,
-        exclude_genes: excludeGenes,
-        target_cellosaurus_id: result.cellosaurus_id,
-        top_n: 1,
-      })
-      setAiData(data)
-    } catch {
-      setAiError(true)
-    } finally {
-      setAiLoading(false)
-    }
+  const handleAI = () => {
+    runAgenticJustification({
+      gene,
+      additionalGenes,
+      diseaseFilter,
+      excludeGenes,
+      targetCellosaurusId: result.cellosaurus_id,
+    })
   }
 
   return (
