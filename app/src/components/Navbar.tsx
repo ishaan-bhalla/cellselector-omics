@@ -1,64 +1,81 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import ThemeToggle from './ThemeToggle'
+import ViewModeToggle from './ViewModeToggle'
+import type { ViewMode } from '../utils/viewMode'
 
-const LINK_BASE = 'text-sm font-medium transition-colors px-1'
+const NAV_LINKS = [
+  { to: '/',       label: 'Home',   end: true  },
+  { to: '/about',  label: 'About',  end: false },
+  { to: '/search', label: 'Search', end: false },
+  { to: '/data',   label: 'Data',   end: false },
+]
 
-export default function Navbar() {
+interface Props {
+  viewMode: ViewMode
+  onViewModeChange: (m: ViewMode) => void
+}
+
+// Corrected direction (see the task that replaced the original hero/nav
+// pass): a thin, dense, three-zone chrome bar — LEFT wordmark + adjacent
+// tag, CENTRE the view-mode control (only meaningful, so only rendered,
+// on /search), RIGHT nav links with a small solid triangle marking the
+// active one, plus the theme toggle. No filled accent button anywhere
+// here (Part 3) — "Search" is just one of the four equal nav links now,
+// not a separate CTA.
+export default function Navbar({ viewMode, onViewModeChange }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
+  const onSearchPage = location.pathname === '/search'
 
   return (
     <nav
       className="sticky top-0 z-50 bg-cso-bg"
       style={{ borderBottom: '1px solid var(--border)' }}
     >
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-        {/* Left — wordmark */}
+      <div className="max-w-7xl mx-auto px-6 py-2.5 flex items-center justify-between gap-6">
+        {/* Left — wordmark + adjacent tag */}
         <button
           onClick={() => navigate('/')}
-          className="font-sans font-semibold text-cso-heading text-[15px] tracking-tight"
+          className="flex items-baseline gap-1.5 flex-shrink-0"
           style={{ background: 'none', border: 'none', cursor: 'pointer' }}
         >
-          CellSelector Omics
+          <span className="font-sans font-semibold text-cso-heading text-[14px] tracking-tight">
+            CellSelector
+          </span>
+          <span
+            className="font-mono text-cso-body"
+            style={{ fontSize: 9, letterSpacing: '0.1em', verticalAlign: 'super' }}
+          >
+            OMICS / v1.0
+          </span>
         </button>
 
-        {/* Centre — plain nav links, no glass pill */}
-        <div className="flex items-center gap-6">
-          {[
-            { to: '/',       label: 'Home',   end: true  },
-            { to: '/search', label: 'Search', end: false },
-            { to: '/data',   label: 'Data',   end: false },
-            { to: '/about',  label: 'About',  end: false },
-          ].map(({ to, label, end }) => (
+        {/* Centre — LIST/GRID/COMPACT, only meaningful on /search */}
+        <div className="flex-1 flex justify-center">
+          {onSearchPage && <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />}
+        </div>
+
+        {/* Right — nav links (active marked with a triangle to its left,
+            dim/bright contrast only, no weight change), theme toggle */}
+        <div className="flex items-center gap-5 flex-shrink-0">
+          {NAV_LINKS.map(({ to, label, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
-              className={({ isActive }) =>
-                `${LINK_BASE} ${isActive ? 'text-cso-heading' : 'text-cso-body hover:text-cso-heading'}`
-              }
+              className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] transition-colors"
             >
-              {label}
+              {({ isActive }) => (
+                <>
+                  <svg width="5" height="7" viewBox="0 0 5 7" aria-hidden="true" style={{ visibility: isActive ? 'visible' : 'hidden' }}>
+                    <path d="M5 3.5L0 7V0z" fill="var(--accent)" />
+                  </svg>
+                  <span style={{ color: isActive ? 'var(--text-heading)' : 'var(--text-body)' }}>{label}</span>
+                </>
+              )}
             </NavLink>
           ))}
-        </div>
-
-        {/* Right — version tag + partnership line + theme toggle */}
-        <div className="flex items-center gap-4">
-          <span className="hidden sm:inline text-[11px] text-cso-body">
-            Bristol &times; AstraZeneca
-          </span>
-          <span className="font-mono text-[11px] text-cso-body">v1.0</span>
           <ThemeToggle />
-          <button
-            onClick={() => navigate('/search')}
-            className="flex items-center gap-1.5 text-xs font-medium bg-cso-teal px-3 py-1.5 rounded hover:brightness-90 transition-all"
-            style={{ color: 'var(--bg)' }}
-          >
-            Search
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M3 8h10M9 4l4 4-4 4" />
-            </svg>
-          </button>
         </div>
       </div>
     </nav>

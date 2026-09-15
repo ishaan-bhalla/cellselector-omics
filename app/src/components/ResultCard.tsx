@@ -147,13 +147,15 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
   }
 
   return (
-    <div
-      className={`bg-cso-card border border-cso-border rounded p-5 ${isTop ? 'border-l-4 border-l-cso-teal' : ''}`}
-    >
+    <div className="result-card-wrap bg-cso-card border border-cso-border rounded p-5">
       {/* Top row — rank, name, CVCL id, fit ring. Part 6: the rank numeral
           and cell line name carry real visual weight, and the ring (sized
           up further, see FitRing's own default) is the clear focal point
-          rather than one element among several equally-weighted ones. */}
+          rather than one element among several equally-weighted ones.
+          Part 5: only rank 1 keeps the ring's accent fill — see FitRing's
+          `dim` prop and index.css's hover/focus restore rule; this is the
+          reference's hard-binary "top result" signal, not the old
+          decorative left-border stripe (removed — redundant with this). */}
       <div className="flex items-start justify-between mb-4 gap-5">
         <div className="flex items-start gap-4 flex-1 min-w-0">
           <span
@@ -165,7 +167,7 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
           <div className="min-w-0 pt-1.5">
             <button
               onClick={() => onCellLineClick(result.cellosaurus_id)}
-              className="hover:text-cso-teal transition-colors text-left truncate max-w-xs block"
+              className="hover:underline transition-colors text-left truncate max-w-xs block"
               style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1.375rem', lineHeight: 1.15 }}
             >
               {result.official_name}
@@ -173,7 +175,7 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
             <div className="text-cso-body font-mono text-xs mt-1">{result.cellosaurus_id}</div>
           </div>
         </div>
-        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} />
+        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} dim={!isTop} />
       </div>
 
       {/* Per-gene percentile breakdown — multi-gene only. The transparency
@@ -286,7 +288,7 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
                 <a
                   href={alt.cellosaurus_url ?? `https://www.cellosaurus.org/${alt.cellosaurus_id}`}
                   target="_blank" rel="noopener noreferrer"
-                  className="text-cso-teal hover:underline mt-1 inline-block"
+                  className="text-cso-heading hover:underline mt-1 inline-block"
                 >
                   Cellosaurus ↗
                 </a>
@@ -358,11 +360,11 @@ export default function ResultCard({ result, gene, diseaseFilter, lineageFilter,
           <button
             onClick={handleAI}
             disabled={aiLoading}
-            className="flex items-center gap-2 text-xs border border-cso-border text-cso-body px-3 py-1.5 rounded hover:border-cso-teal hover:text-cso-teal transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 text-xs border border-cso-border text-cso-body px-3 py-1.5 rounded hover:border-cso-heading hover:text-cso-heading transition-colors disabled:opacity-50"
           >
             {aiLoading ? (
               <>
-                <span className="w-3 h-3 border border-cso-border border-t-cso-teal rounded-full animate-spin" />
+                <span className="w-3 h-3 border border-cso-border border-t-cso-heading rounded-full animate-spin" />
                 Generating AI justification…
               </>
             ) : (

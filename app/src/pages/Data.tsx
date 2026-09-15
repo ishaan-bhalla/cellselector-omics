@@ -64,7 +64,7 @@ export default function Data() {
             {SOURCES.map((s, i) => (
               <Reveal key={s.key} delay={i * 50}>
                 <div className="flex items-baseline gap-6 py-6" style={{ borderTop: '1px solid var(--border)' }}>
-                  <span className="text-cso-teal font-mono font-semibold text-sm flex-shrink-0 w-16">{s.key}</span>
+                  <span className="text-cso-heading font-mono font-semibold text-sm flex-shrink-0 w-16">{s.key}</span>
                   <div>
                     <div className="text-cso-heading font-semibold mb-1" style={{ fontSize: '1.05rem' }}>{s.name}</div>
                     <p className="text-cso-body text-sm leading-relaxed" style={{ maxWidth: 560 }}>{s.body}</p>

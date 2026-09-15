@@ -10,13 +10,16 @@ interface Props {
   onCellLineClick: (cvcl: string) => void
 }
 
-// GRID view — a more compact per-card layout than LIST (see
-// ViewModeToggle): still carries the Part 1 labelling fix (GENE CLASS /
-// GENE ROLE, metric tooltips, CONTEXT n/a) in full, but drops the
-// collapsible Alternatives / Score breakdown / AI Justification depth —
-// click through to the cell line detail panel (same as LIST's name click)
-// for that. Trimmed to 4 evidence metrics (RNA/PROTEIN/QUALITY/CONTEXT,
-// dropping PATHWAY/RWR) to actually earn "compact," not just relabelled.
+// GRID view — corrected direction: edge-to-edge, zero-gutter (Part 4).
+// This card itself carries NO border and NO rounding any more — the
+// parent grid in Search.tsx uses Tailwind's `divide-x divide-y` to draw
+// ONE shared hairline between cells, not each card framing itself. Still
+// carries the Part 1 labelling fix (GENE CLASS / GENE ROLE, metric
+// tooltips, CONTEXT n/a) in full, but drops the collapsible Alternatives /
+// Score breakdown / AI Justification depth — click through to the cell
+// line detail panel (same as LIST's name click) for that. Trimmed to 4
+// evidence metrics (RNA/PROTEIN/QUALITY/CONTEXT, dropping PATHWAY/RWR) to
+// actually earn "compact," not just relabelled.
 export default function ResultCardGrid({ result, diseaseFilter, lineageFilter, onCellLineClick }: Props) {
   const isMultiGene = isMultiGeneResult(result)
   const scorePct = getScorePct(result)
@@ -25,7 +28,7 @@ export default function ResultCardGrid({ result, diseaseFilter, lineageFilter, o
   const isTop = result.rank === 1
 
   return (
-    <div className={`bg-cso-card border border-cso-border rounded p-4 ${isTop ? 'border-l-4 border-l-cso-teal' : ''}`}>
+    <div className="result-card-wrap bg-cso-card p-5">
       <div className="flex items-start justify-between mb-3 gap-3">
         <div className="flex items-start gap-2.5 flex-1 min-w-0">
           <span
@@ -37,7 +40,7 @@ export default function ResultCardGrid({ result, diseaseFilter, lineageFilter, o
           <div className="min-w-0 pt-0.5">
             <button
               onClick={() => onCellLineClick(result.cellosaurus_id)}
-              className="hover:text-cso-teal transition-colors text-left truncate block w-full"
+              className="hover:underline transition-colors text-left truncate block w-full"
               style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}
             >
               {result.official_name}
@@ -45,7 +48,7 @@ export default function ResultCardGrid({ result, diseaseFilter, lineageFilter, o
             <div className="text-cso-body font-mono text-[11px] mt-0.5">{result.cellosaurus_id}</div>
           </div>
         </div>
-        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT'} size={56} />
+        <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT'} size={56} dim={!isTop} />
       </div>
 
       {isMultiGene ? (

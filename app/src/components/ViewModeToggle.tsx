@@ -11,41 +11,27 @@ interface Props {
   onChange: (mode: ViewMode) => void
 }
 
-// Horizontal segmented control with a sliding highlight (CSS transform
-// transition, no library) — three real, equally-weighted states, not
-// three small separate buttons. The highlight pill is absolutely
-// positioned at 1/3 the track width and translated by index * 100%, so it
-// slides under whichever label is active rather than each button toggling
-// its own background independently.
+// Flat text-with-marker treatment (corrected direction) — NOT a pill/
+// segmented control. Three plain letter-spaced uppercase words; the
+// active one is --text-heading with a small solid triangle beneath it
+// (the one sanctioned decorative use of --accent per Part 3 — an
+// active-state marker, not a fill), inactive ones sit at --text-body.
 export default function ViewModeToggle({ mode, onChange }: Props) {
-  const activeIndex = MODES.findIndex(m => m.key === mode)
-
   return (
-    <div
-      className="relative inline-flex rounded"
-      style={{ border: '1px solid var(--border)', padding: 2 }}
-    >
-      <div
-        aria-hidden="true"
-        className="absolute rounded"
-        style={{
-          top: 2, bottom: 2, left: 2,
-          width: `calc((100% - 4px) / 3)`,
-          background: 'var(--accent)',
-          transform: `translateX(${activeIndex * 100}%)`,
-          transition: 'transform 240ms ease',
-        }}
-      />
+    <div className="flex items-center gap-5">
       {MODES.map(m => {
         const active = m.key === mode
         return (
           <button
             key={m.key}
             onClick={() => onChange(m.key)}
-            className="relative z-10 px-4 py-1.5 text-xs font-medium transition-colors"
-            style={{ color: active ? 'var(--bg)' : 'var(--text-body)', minWidth: 72 }}
+            className="flex flex-col items-center gap-1 text-[11px] uppercase tracking-[0.12em] font-medium transition-colors"
+            style={{ color: active ? 'var(--text-heading)' : 'var(--text-body)' }}
           >
             {m.label}
+            <svg width="7" height="5" viewBox="0 0 7 5" aria-hidden="true" style={{ visibility: active ? 'visible' : 'hidden' }}>
+              <path d="M3.5 5L0 0h7z" fill="var(--accent)" />
+            </svg>
           </button>
         )
       })}

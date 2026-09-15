@@ -5,8 +5,7 @@ import ResultCardGrid from '../components/ResultCardGrid'
 import ResultCardCompact from '../components/ResultCardCompact'
 import SlideOver from '../components/SlideOver'
 import Reveal from '../components/Reveal'
-import ViewModeToggle from '../components/ViewModeToggle'
-import { getViewMode, setViewMode, type ViewMode } from '../utils/viewMode'
+import type { ViewMode } from '../utils/viewMode'
 
 const LOADING_LINES = [
   'Resolving gene symbol',
@@ -128,7 +127,7 @@ function GeneAutocompleteInput({
         placeholder={placeholder}
         autoFocus={autoFocus}
         autoComplete="off"
-        className="w-full bg-cso-card border border-[var(--border)] text-[var(--text-heading)] font-mono text-lg px-4 py-3 rounded focus:outline-none focus:border-[var(--accent)] transition-colors placeholder-[var(--muted-state)]"
+        className="w-full bg-cso-card border border-[var(--border)] text-[var(--text-heading)] font-mono text-lg px-4 py-3 rounded focus:outline-none focus:border-[var(--text-heading)] transition-colors placeholder-[var(--muted-state)]"
       />
       {showDropdown && suggestions.length > 0 && (
         <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-cso-card border border-[var(--border)] rounded">
@@ -148,7 +147,11 @@ function GeneAutocompleteInput({
   )
 }
 
-export default function Search() {
+interface Props {
+  viewMode: ViewMode
+}
+
+export default function Search({ viewMode }: Props) {
   const [gene, setGene] = useState('')
   // Per-gene stats (found/sources/cell-line count) for the gene actually
   // SELECTED from the dropdown — no longer fetched per keystroke, so
@@ -189,10 +192,9 @@ export default function Search() {
   const [showAddGene, setShowAddGene] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
-  // Persisted the same way as the theme choice (Stage 1) — see
-  // utils/viewMode.ts.
-  const [viewMode, setViewModeState] = useState<ViewMode>(getViewMode)
-  const changeViewMode = (m: ViewMode) => { setViewModeState(m); setViewMode(m) }
+  // viewMode/onViewModeChange now come in as props — lifted to App.tsx so
+  // the corrected-direction Navbar can host the control in its centre
+  // zone and stay in sync in real time (see App.tsx).
   // Keeps the loading takeover MOUNTED for a brief window after `loading`
   // flips false, so its collapse (Part 4) is a CSS transition rather than
   // an instant unmount — see the takeover's own maxHeight/opacity, which
@@ -415,7 +417,7 @@ export default function Search() {
               )}
             </div>
             {geneInfo && !geneLoading && (
-              <div className="mt-2 text-xs font-mono text-[var(--accent)]">
+              <div className="mt-2 text-xs font-mono text-[var(--text-heading)]">
                 {`${geneInfo.gene ?? gene.toUpperCase()}, ${sourcesFound}, ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
               </div>
             )}
@@ -477,15 +479,22 @@ export default function Search() {
             )}
           </div>
 
-          {/* Filters */}
+          {/* Filters — each carries a bracket-syntax state marker
+              (Part 6), used sparingly and only as a small metadata
+              annotation next to the label, not the label itself. */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
             {[
-              { label: 'Disease Filter',           value: diseaseFilter, set: setDiseaseFilter, ph: 'e.g. lung, breast' },
-              { label: 'Tissue Type',               value: lineageFilter, set: setLineageFilter, ph: 'e.g. lung, breast, epithelial' },
-              { label: 'Exclude Genes (comma sep)', value: excludeGenes,  set: setExcludeGenes,  ph: 'e.g. KRAS, NRAS' },
-            ].map(({ label, value, set, ph }) => (
+              { label: 'Disease Filter',           tag: 'DISEASE',  value: diseaseFilter, set: setDiseaseFilter, ph: 'e.g. lung, breast' },
+              { label: 'Tissue Type',               tag: 'TISSUE',   value: lineageFilter, set: setLineageFilter, ph: 'e.g. lung, breast, epithelial' },
+              { label: 'Exclude Genes (comma sep)', tag: 'EXCLUDE',  value: excludeGenes,  set: setExcludeGenes,  ph: 'e.g. KRAS, NRAS' },
+            ].map(({ label, tag, value, set, ph }) => (
               <div key={label}>
-                <label className="text-[var(--text-body)] text-xs uppercase tracking-widest block mb-2">{label}</label>
+                <label className="text-[var(--text-body)] text-xs uppercase tracking-widest flex items-center justify-between mb-2">
+                  {label}
+                  <span className="font-mono text-[10px]" style={{ color: value.trim() ? 'var(--text-heading)' : 'var(--muted-state)' }}>
+                    {tag}:[{value.trim() ? 'SET' : '—'}]
+                  </span>
+                </label>
                 <input
                   type="text" value={value}
                   onChange={e => set(e.target.value)}
@@ -511,7 +520,7 @@ export default function Search() {
             <button
               onClick={handleSearch}
               disabled={!gene.trim() || loading}
-              className="flex-1 bg-cso-teal font-semibold py-3 rounded hover:brightness-90 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 bg-cso-heading font-semibold py-3 rounded hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ color: 'var(--bg)' }}
             >
               {loading ? 'Running' : 'Run Analysis'}
@@ -553,7 +562,7 @@ export default function Search() {
                   >
                     {line}
                     {isCurrent && i < LOADING_LINES.length - 1 && (
-                      <span className="animate-pulse ml-1" style={{ color: 'var(--accent)' }}>_</span>
+                      <span className="animate-pulse ml-1" style={{ color: 'var(--text-heading)' }}>_</span>
                     )}
                   </div>
                 )
@@ -664,7 +673,9 @@ export default function Search() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <ViewModeToggle mode={viewMode} onChange={changeViewMode} />
+                {/* View mode is now chosen from the navbar's centre zone
+                    (Part 2 of the corrected direction) — `viewMode` prop
+                    still drives which layout renders below. */}
                 <div className="relative" ref={exportMenuRef}>
                   <button
                     onClick={() => setExportOpen(o => !o)}
@@ -716,9 +727,14 @@ export default function Search() {
             )}
 
             {viewMode === 'grid' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              // Edge-to-edge, zero-gutter (Part 4) — one outer frame
+              // border, no gap between cells, a single shared hairline
+              // drawn by the .results-grid/.grid-cell CSS in index.css
+              // (border-bottom always, border-right once 2 columns are
+              // active) rather than each card framing itself.
+              <div className="results-grid grid grid-cols-1 sm:grid-cols-2" style={{ border: '1px solid var(--border)' }}>
                 {(displayedResults!.results as any[]).map((r: any, i: number) => (
-                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 8) * 30}>
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 8) * 30} className="grid-cell">
                     <ResultCardGrid
                       result={r}
                       diseaseFilter={allResults.query?.disease_filter}
@@ -745,6 +761,31 @@ export default function Search() {
                 </div>
               </Reveal>
             )}
+
+            {/* Bottom status bar (Part 2) — a second thin, dense chrome
+                bar mirroring the navbar's near-black bg, in the reference's
+                bracket-syntax metadata style, showing live session/query
+                state rather than decoration. */}
+            <div
+              className="bg-cso-bg flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 mt-4 font-mono"
+              style={{ border: '1px solid var(--border)', fontSize: 11 }}
+            >
+              <span style={{ color: 'var(--text-heading)' }}>
+                RESULTS:[{displayedResults?.results.length ?? 0}]
+              </span>
+              <span style={{ color: 'var(--text-body)' }}>
+                {isMultiGene
+                  ? [allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])].join('+')
+                  : allResults.query?.gene}
+                {' · '}
+                {allResults.metadata?.total_candidates?.toLocaleString() ?? '0'} CANDIDATES
+              </span>
+              <span style={{ color: 'var(--text-body)' }}>
+                FILTERS:[{(diseaseFilter.trim() || lineageFilter.trim() || excludeGenes.trim()) ? 'ON' : 'OFF'}]
+                {'  '}
+                MULTI-GENE:[{isMultiGene ? 'ON' : 'OFF'}]
+              </span>
+            </div>
 
             {/* Pathway-Connected Recommendations */}
             <div className="mt-8 pt-8 border-t border-[var(--border)]">
@@ -773,7 +814,7 @@ export default function Search() {
                   return (
                     <div
                       key={r.cellosaurus_id}
-                      className="border border-[var(--border)] rounded p-3 mb-2 cursor-pointer hover:border-[var(--accent)] transition-colors"
+                      className="border border-[var(--border)] rounded p-3 mb-2 cursor-pointer hover:border-[var(--text-heading)] transition-colors"
                       onClick={() => setSelectedCVCL(r.cellosaurus_id)}
                     >
                       <div className="flex justify-between">

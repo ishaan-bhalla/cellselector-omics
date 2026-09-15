@@ -64,7 +64,7 @@ export default function About() {
             {PRINCIPLES.map((p, i) => (
               <Reveal key={p.n} delay={i * 60}>
                 <div className="flex items-baseline gap-8 py-8" style={{ borderTop: '1px solid var(--border)' }}>
-                  <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{p.n}</span>
+                  <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--text-body)' }}>{p.n}</span>
                   <div>
                     <h3 className="font-semibold mb-2" style={{ fontSize: '1.25rem', color: 'var(--text-heading)' }}>{p.title}</h3>
                     <p className="text-cso-body leading-relaxed" style={{ fontSize: 15, maxWidth: 560 }}>{p.body}</p>

@@ -1,18 +1,28 @@
-// Flat circular progress ring for the Fit Score — see the original
-// redesign task's Part 2 spec. No glow, no blur, no gradient fill, no
-// shadow: a plain track + fill arc, both flat strokes. Part 5/6 of the
-// studio-grade pass: the centre numeral reads as a confident, oversized
-// instrument readout, not default-sized text that happens to be bold —
-// it's deliberately the largest single number on a result card.
+// Flat circular progress ring for the Fit Score. No glow, no blur, no
+// gradient fill, no shadow: a plain track + fill arc, both flat strokes.
+// The centre numeral reads as a confident, oversized instrument readout —
+// deliberately the largest single number on a result card.
+//
+// `dim` (Part 5's hard binary contrast device): the single top-ranked
+// result keeps the ring's accent fill; every other result renders it in
+// --muted-state instead — a real, meaningful "this is the strongest
+// match" signal using this tool's own rank, not decoration. The fill
+// circle carries the `fitring-fill` class specifically so a parent
+// `.result-card-wrap:hover`/`:focus` rule (see index.css) can restore
+// full accent color on hover/focus of that specific card, per the task's
+// "full contrast returning on hover/focus" requirement — done in CSS, not
+// per-row JS state, since :hover/:focus already scope correctly with no
+// extra bookkeeping across a list of cards.
 
 interface Props {
   /** 0-1 */
   score: number
   size?: number
   label?: string
+  dim?: boolean
 }
 
-export default function FitRing({ score, size = 88, label = 'FIT SCORE' }: Props) {
+export default function FitRing({ score, size = 88, label = 'FIT SCORE', dim = false }: Props) {
   const pct = Math.round(Math.min(1, Math.max(0, score || 0)) * 100)
   const stroke = Math.max(5, Math.round(size * 0.065))
   const r = (size - stroke) / 2
@@ -30,12 +40,13 @@ export default function FitRing({ score, size = 88, label = 'FIT SCORE' }: Props
           fill="none" stroke="var(--border)" strokeWidth={stroke}
         />
         <circle
+          className="fitring-fill"
           cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke="var(--accent)" strokeWidth={stroke}
+          fill="none" stroke={dim ? 'var(--muted-state)' : 'var(--accent)'} strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${c - dash}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          style={{ transition: 'stroke-dasharray 0.5s ease' }}
+          style={{ transition: 'stroke-dasharray 0.5s ease, stroke 200ms ease' }}
         />
         <text
           x="50%" y="50%"

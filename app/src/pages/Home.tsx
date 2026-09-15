@@ -26,7 +26,7 @@ function UnderlineCTA({ to, children }: { to: string; children: React.ReactNode 
         aria-hidden="true"
         style={{
           position: 'absolute', left: 0, right: 0, bottom: 0, height: 2,
-          background: 'var(--accent)', transform: hovered ? 'scaleX(1)' : 'scaleX(0)',
+          background: 'var(--text-heading)', transform: hovered ? 'scaleX(1)' : 'scaleX(0)',
           transformOrigin: 'left', transition: 'transform 280ms ease',
         }}
       />
@@ -67,43 +67,6 @@ const STEPS = [
   { n: '04', title: 'Get an AI justification', body: 'a cited, plain-language rationale for the top pick' },
 ]
 
-// Doubled/ghost headline — the front copy solid, a second copy of the same
-// text rendered behind it at low opacity and a small offset (Part 1's
-// "documenting emotion, documenting emotion" device). Pure CSS: one
-// relatively-positioned element, one absolutely-positioned duplicate
-// behind it — no library, no JS-driven animation.
-function KineticHeadline() {
-  const text = (
-    <>
-      Find the right<br />cell line.
-    </>
-  )
-  return (
-    <div style={{ position: 'relative' }}>
-      <h1
-        aria-hidden="true"
-        style={{
-          position: 'absolute', top: 10, left: 8,
-          margin: 0, color: 'var(--text-heading)', opacity: 0.1,
-          fontSize: 'clamp(3.5rem, 9vw, 8.5rem)', fontWeight: 700, lineHeight: 0.98,
-          letterSpacing: '-0.02em', userSelect: 'none', pointerEvents: 'none',
-        }}
-      >
-        {text}
-      </h1>
-      <h1
-        style={{
-          position: 'relative', margin: 0, color: 'var(--text-heading)',
-          fontSize: 'clamp(3.5rem, 9vw, 8.5rem)', fontWeight: 700, lineHeight: 0.98,
-          letterSpacing: '-0.02em',
-        }}
-      >
-        {text}
-      </h1>
-    </div>
-  )
-}
-
 export default function Home() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [health, setHealth] = useState<any>(null)
@@ -122,10 +85,12 @@ export default function Home() {
   return (
     <div className="bg-cso-bg">
 
-      {/* ── Hero — immersive, full-bleed, chrome-free: eyebrow, oversized
-          doubled headline, subhead, one confident CTA. DNAHelix demoted to
-          a faint full-bleed backdrop rather than a competing 55%-width
-          zone, so the typography is unambiguously the focal point. ── */}
+      {/* ── Hero — content and negative space, minimal chrome: eyebrow, a
+          normal-scale, confident (not dominant) headline, subhead, one
+          CTA. The earlier oversized doubled/ghost-text headline was a
+          misread of the reference and has been removed entirely — see
+          the correction that replaced it. DNAHelix stays as a faint
+          full-bleed backdrop. ── */}
       <section
         style={{
           position: 'relative', height: 'calc(100vh - 65px)', minHeight: 560,
@@ -153,7 +118,15 @@ export default function Home() {
             University of Bristol &times; AstraZeneca
           </p>
 
-          <KineticHeadline />
+          <h1
+            style={{
+              margin: 0, color: 'var(--text-heading)',
+              fontSize: 'clamp(2rem, 3.6vw, 2.75rem)', fontWeight: 700, lineHeight: 1.15,
+              letterSpacing: '-0.01em', maxWidth: 480,
+            }}
+          >
+            Find the right cell line.
+          </h1>
 
           <p style={{ color: 'var(--text-body)', fontSize: 18, lineHeight: 1.6, maxWidth: 460, margin: '32px 0 0' }}>
             Multi-omics recommendation across 2,076 human cell lines,
@@ -216,7 +189,7 @@ export default function Home() {
                     className="flex items-baseline gap-8 py-8"
                     style={{ borderTop: '1px solid var(--border)' }}
                   >
-                    <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>
+                    <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--text-body)' }}>
                       {c.n}
                     </span>
                     <div>
@@ -240,7 +213,7 @@ export default function Home() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
             {STEPS.map((step, i) => (
               <Reveal key={step.n} delay={i * 60}>
-                <div className="font-mono text-xs mb-2" style={{ color: 'var(--accent)' }}>{step.n}</div>
+                <div className="font-mono text-xs mb-2" style={{ color: 'var(--text-body)' }}>{step.n}</div>
                 <p className="font-semibold mb-1" style={{ fontSize: 15, color: 'var(--text-heading)' }}>{step.title}</p>
                 <p className="text-cso-body text-xs leading-relaxed">{step.body}</p>
               </Reveal>

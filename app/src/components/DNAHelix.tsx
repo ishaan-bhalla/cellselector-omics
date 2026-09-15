@@ -183,10 +183,11 @@ export default function DNAHelix({ mousePos }: Props) {
         />
       ))}
 
-      {/* Strand 1 — teal */}
+      {/* Strand 1 — neutral (Part 3: --accent reserved for functional
+          markers only, not decorative hero art) */}
       <path
         ref={strand1Ref} d="M -2000 -2000"
-        fill="none" stroke="var(--accent)" strokeWidth="3"
+        fill="none" stroke="var(--text-body)" strokeWidth="3"
         strokeLinecap="round" opacity="0.9"
       />
 
@@ -203,7 +204,7 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`d1-${idx}`}
           ref={el => { dot1Refs.current[ni] = el }}
           cx="-2000" cy="-2000" r="3"
-          fill="var(--bg-card)" stroke="var(--accent)" strokeWidth="1.5"
+          fill="var(--bg-card)" stroke="var(--text-body)" strokeWidth="1.5"
         />
       ))}
 

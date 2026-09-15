@@ -69,3 +69,33 @@ body {
 .console-line {
   animation: console-line-in 320ms ease both;
 }
+
+/* Part 5's hard binary contrast device: non-top results render their
+   FitRing (or, in COMPACT mode, their fit-percentage text) in
+   --muted-state via the `dim` prop; this rule restores full --accent
+   contrast the instant that specific card is hovered or focused, then
+   reverts when it isn't — no JS state needed, :hover/:focus already
+   scope to the one card. !important is required here because the ring's
+   colour is set via an SVG presentation attribute (stroke=), which sits
+   below both inline style and stylesheet rules in the cascade — without
+   it this rule would never win. */
+.result-card-wrap:hover .fitring-fill,
+.result-card-wrap:focus .fitring-fill,
+.result-card-wrap:focus-within .fitring-fill {
+  stroke: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+/* Part 4 — GRID view, edge-to-edge with a single shared hairline between
+   cells instead of each card framing itself with its own border+gap.
+   border-bottom always; border-right only once the sm: breakpoint's
+   2-column layout is active (matches Search.tsx's `sm:grid-cols-2`) —
+   below that every cell is full-width and a right border would be wrong. */
+.results-grid > .grid-cell {
+  border-bottom: 1px solid var(--border);
+}
+@media (min-width: 640px) {
+  .results-grid > .grid-cell:nth-child(odd) {
+    border-right: 1px solid var(--border);
+  }
+}

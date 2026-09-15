@@ -37,18 +37,26 @@ export default function ResultCardCompact({ result, diseaseFilter, lineageFilter
   const scorePct = getScorePct(result)
   const hasFilter = computeHasContextFilter(diseaseFilter, lineageFilter)
   const pct = Math.round(scorePct * 100)
+  const isTop = result.rank === 1
 
   return (
     <button
       onClick={() => onCellLineClick(result.cellosaurus_id)}
-      className="w-full flex items-center gap-4 px-4 py-2.5 text-left hover:bg-cso-bg transition-colors"
+      className="result-card-wrap w-full flex items-center gap-4 px-4 py-2.5 text-left hover:bg-cso-bg transition-colors"
       style={{ borderBottom: '1px solid var(--border)' }}
     >
       <span className="font-mono text-xs text-cso-body w-6 flex-shrink-0" style={{ opacity: 0.6 }}>
         {String(result.rank).padStart(2, '0')}
       </span>
 
-      <span className="font-mono text-sm font-semibold w-11 flex-shrink-0" style={{ color: 'var(--accent)' }}>
+      {/* Part 5's hard binary contrast — only the top-ranked row keeps the
+          accent fit-%; every other row is muted-state (fitring-fill class
+          so index.css's hover/focus rule restores full accent while this
+          specific row is hovered or focused). */}
+      <span
+        className="fitring-fill font-mono text-sm font-semibold w-11 flex-shrink-0"
+        style={{ color: isTop ? 'var(--accent)' : 'var(--muted-state)' }}
+      >
         {pct}%
       </span>
 
