@@ -9,3 +9,9 @@
 html {
   scroll-behavior: smooth;
 }
+
+body {
+  background: #F7F6F2;
+  color: #1A1A1A;
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+}

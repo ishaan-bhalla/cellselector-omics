@@ -4,13 +4,13 @@ import ResultCard from '../components/ResultCard'
 import SlideOver from '../components/SlideOver'
 
 const LOADING_LINES = [
-  '> Resolving gene symbol…',
-  '> Computing RNA expression scores…',
-  '> Applying protein expression weights…',
-  '> Running GEO cross-validation…',
-  '> Ranking 2,076 cell lines…',
-  '> Computing similarity alternatives…',
-  '> Analysis complete.',
+  'Resolving gene symbol',
+  'Computing RNA expression scores',
+  'Applying protein expression weights',
+  'Running GEO cross-validation',
+  'Ranking 2,076 cell lines',
+  'Computing similarity alternatives',
+  'Analysis complete',
 ]
 
 // models.classical.weights_learned.VALIDATION_SET's length, confirmed
@@ -49,7 +49,7 @@ const WEIGHT_COMPONENT_INFO: Record<string, { label: string; description: string
   protein:     { label: 'Protein',                description: 'protein abundance from CCLE proteomics' },
   quality:     { label: 'Data Quality',           description: 'cross-source agreement and data completeness' },
   context:     { label: 'Context',                description: 'disease/tissue match to your search filter' },
-  mutation:    { label: 'Mutation Impact',        description: 'damaging-variant status — the primary signal for loss-of-function genes' },
+  mutation:    { label: 'Mutation Impact',        description: 'damaging-variant status, the primary signal for loss-of-function genes' },
   copy_number: { label: 'Copy Number',            description: 'amplification status, for amplification-driven oncogenes' },
   rwr:         { label: 'Graph Centrality (RWR)', description: 'random-walk-with-restart network proximity across the gene/pathway/cell-line knowledge graph' },
 }
@@ -123,17 +123,16 @@ function GeneAutocompleteInput({
         placeholder={placeholder}
         autoFocus={autoFocus}
         autoComplete="off"
-        className="w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] font-mono text-lg px-4 py-3 rounded-xl focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]"
-        style={{ boxShadow: value ? '0 0 0 3px rgba(29,29,31,0.06)' : undefined }}
+        className="w-full bg-cso-card border border-[#E5E3DD] text-[#1A1A1A] font-mono text-lg px-4 py-3 rounded focus:outline-none focus:border-[#0F766E] transition-colors placeholder-[#9A9691]"
       />
       {showDropdown && suggestions.length > 0 && (
-        <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-white border border-[#D2D2D7] rounded-xl shadow-lg">
+        <div className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto bg-cso-card border border-[#E5E3DD] rounded">
           {suggestions.map(g => (
             <button
               key={g}
               type="button"
               onClick={() => { onSelect(g); setShowDropdown(false) }}
-              className="w-full text-left px-4 py-2 font-mono text-sm text-[#1D1D1F] hover:bg-[#F5F5F7] transition-colors"
+              className="w-full text-left px-4 py-2 font-mono text-sm text-[#1A1A1A] hover:bg-[#F7F6F2] transition-colors"
             >
               {g}
             </button>
@@ -320,7 +319,7 @@ export default function Search() {
 
   const exportPDF = async () => {
     if (!allResults?.session_id) {
-      alert('No session available — run a search first')
+      alert('No session available, run a search first')
       return
     }
     const response = await fetch(`/recommend/export/pdf?session_id=${allResults.session_id}`)
@@ -359,22 +358,22 @@ export default function Search() {
         .filter(([, v]) => v).map(([k]) => k).join(' · ')
     : ''
 
-  const inputCls = `w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] px-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]`
+  const inputCls = `w-full bg-cso-card border border-[#E5E3DD] text-[#1A1A1A] px-4 py-2.5 rounded text-sm focus:outline-none focus:border-[#1A1A1A] transition-colors placeholder-[#E5E3DD]`
 
   return (
-    <div className="min-h-screen bg-white pt-24">
+    <div className="min-h-screen bg-cso-bg">
       {/* Search panel */}
-      <div className="bg-white border-b border-[#D2D2D7]">
+      <div className="bg-cso-card border-b border-[#E5E3DD] pt-10">
         <div className="max-w-3xl mx-auto px-6 pb-8">
-          <p className="text-[#6E6E73] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
-          <h1 className="text-[#1D1D1F] text-3xl font-bold mb-8">Search Tool</h1>
+          <p className="text-[#6B6B6B] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
+          <h1 className="text-[#1A1A1A] text-3xl font-bold mb-8">Search Tool</h1>
 
           {/* Gene input — client-side-filtered dropdown via the shared
               GeneAutocompleteInput (also used below for additional genes).
               Zero network requests while typing; suggestions filtered
               instantly from the already-loaded full gene list. */}
           <div className="mb-5">
-            <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">Gene Name</label>
+            <label className="text-[#6B6B6B] text-xs uppercase tracking-widest block mb-2">Gene Name</label>
             <div className="relative">
               <GeneAutocompleteInput
                 value={gene}
@@ -387,13 +386,13 @@ export default function Search() {
               />
               {geneLoading && (
                 <div className="absolute right-3.5 top-4">
-                  <div className="w-4 h-4 border border-[#D2D2D7] border-t-[#1D1D1F] rounded-full animate-spin" />
+                  <div className="w-4 h-4 border border-[#E5E3DD] border-t-[#1A1A1A] rounded-full animate-spin" />
                 </div>
               )}
             </div>
             {geneInfo && !geneLoading && (
-              <div className="mt-2 text-xs font-mono text-[#2D6A4F]">
-                {`✓ ${geneInfo.gene ?? gene.toUpperCase()} — ${sourcesFound} — ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
+              <div className="mt-2 text-xs font-mono text-[#0F766E]">
+                {`${geneInfo.gene ?? gene.toUpperCase()}, ${sourcesFound}, ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
               </div>
             )}
 
@@ -405,14 +404,14 @@ export default function Search() {
                 {additionalGenes.map(g => (
                   <span
                     key={g}
-                    className="inline-flex items-center gap-1.5 text-xs font-mono bg-[#F5F5F7] text-[#1D1D1F] px-2.5 py-1 rounded-full"
+                    className="inline-flex items-center gap-1.5 text-xs font-mono bg-[#F7F6F2] text-[#1A1A1A] px-2.5 py-1 rounded-full"
                   >
                     {g}
                     <button
                       type="button"
                       onClick={() => removeAdditionalGene(g)}
                       aria-label={`Remove ${g}`}
-                      className="text-[#6E6E73] hover:text-[#C62828] transition-colors leading-none"
+                      className="text-[#6B6B6B] hover:text-[#B45309] transition-colors leading-none"
                     >
                       ×
                     </button>
@@ -427,7 +426,7 @@ export default function Search() {
               // this is a deliberate limit, not a missing feature. Mirrors
               // the backend's rejection message in api/models.py.
               <p
-                className="mt-2 text-xs text-[#6E6E73]"
+                className="mt-2 text-xs text-[#6B6B6B]"
                 title="Temporary memory-safety limit on this server, not a permanent feature restriction."
               >
                 Maximum {MAX_ADDITIONAL_GENES + 1} genes per search
@@ -447,7 +446,7 @@ export default function Search() {
               <button
                 type="button"
                 onClick={() => setShowAddGene(true)}
-                className="mt-2 text-xs text-[#6E6E73] hover:text-[#1D1D1F] transition-colors"
+                className="mt-2 text-xs text-[#6B6B6B] hover:text-[#1A1A1A] transition-colors"
               >
                 + Add another gene
               </button>
@@ -462,7 +461,7 @@ export default function Search() {
               { label: 'Exclude Genes (comma sep)', value: excludeGenes,  set: setExcludeGenes,  ph: 'e.g. KRAS, NRAS' },
             ].map(({ label, value, set, ph }) => (
               <div key={label}>
-                <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">{label}</label>
+                <label className="text-[#6B6B6B] text-xs uppercase tracking-widest block mb-2">{label}</label>
                 <input
                   type="text" value={value}
                   onChange={e => set(e.target.value)}
@@ -476,11 +475,11 @@ export default function Search() {
 
           <div className="flex items-center gap-4 flex-wrap">
             <div className="flex items-center gap-2">
-              <label className="text-[#6E6E73] text-xs uppercase tracking-widest">Top</label>
+              <label className="text-[#6B6B6B] text-xs uppercase tracking-widest">Top</label>
               <select
                 value={topN}
                 onChange={e => setTopN(Number(e.target.value))}
-                className="bg-white border border-[#D2D2D7] text-[#1D1D1F] px-3 py-2 rounded-xl text-sm focus:outline-none"
+                className="bg-cso-card border border-[#E5E3DD] text-[#1A1A1A] px-3 py-2 rounded text-sm focus:outline-none"
               >
                 {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
@@ -488,32 +487,28 @@ export default function Search() {
             <button
               onClick={handleSearch}
               disabled={!gene.trim() || loading}
-              className="flex-1 bg-[#1D1D1F] text-white font-semibold py-3 rounded-xl hover:bg-[#333333] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 bg-[#0F766E] text-[#FAF9F6] font-semibold py-3 rounded hover:bg-[#0D655E] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {loading ? 'Running…' : 'Run Analysis →'}
+              {loading ? 'Running' : 'Run Analysis'}
             </button>
           </div>
         </div>
       </div>
 
       <div className="max-w-3xl mx-auto px-6 py-8">
-        {/* Loading terminal */}
+        {/* Loading — plain status line, not a decorative terminal window */}
         {loading && (
-          <div className="bg-[#F5F5F7] border border-[#D2D2D7] rounded-xl p-4 font-mono text-xs mb-8">
-            {LOADING_LINES.slice(0, loadLine + 1).map((line, i) => (
-              <div key={i} className="text-[#6E6E73]">
-                {line}
-                {i === loadLine && i < LOADING_LINES.length - 1 && (
-                  <span className="animate-pulse ml-0.5 text-[#1D1D1F]">█</span>
-                )}
-              </div>
-            ))}
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-4 h-4 border border-[#E5E3DD] border-t-[#0F766E] rounded-full animate-spin flex-shrink-0" />
+            <span className="text-xs text-[#6B6B6B]">
+              {LOADING_LINES[loadLine]}
+            </span>
           </div>
         )}
 
         {/* Error */}
         {error && (
-          <div className="bg-[#FCE4EC] border border-[#F8BBD9] rounded-xl p-4 text-[#C62828] text-sm mb-6">
+          <div className="bg-cso-card border border-[#B45309] rounded p-4 text-[#B45309] text-sm mb-6">
             {error}
           </div>
         )}
@@ -525,20 +520,20 @@ export default function Search() {
                 multi-gene queries (weights_used is a flat dict for
                 single-gene, {gene: {...weights}} for multi-gene; see
                 describeWeights/WEIGHT_COMPONENT_INFO above). */}
-            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
-                <div className="font-semibold text-black mb-2">
+            <div className="bg-cso-bg border border-[#E5E3DD] rounded p-4 mb-4 text-xs text-[#6B6B6B] leading-relaxed">
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold text-[#1A1A1A] mb-2">
                   How Fit Score is computed
                 </div>
                 <p>
                   Each cell line's Fit Score combines whichever evidence
-                  components are active for the queried gene(s) — the set
+                  components are active for the queried gene(s): the set
                   and weighting is tuned per gene class (loss-of-function
-                  genes weight <strong>Mutation Impact</strong> heavily;
+                  genes weight <strong>Mutation Impact</strong> heavily,
                   amplification-driven oncogenes add{' '}
-                  <strong>Copy Number</strong>; other genes weight
+                  <strong>Copy Number</strong>, other genes weight
                   expression more heavily), all optimised by maximising
                   Mean Reciprocal Rank against a {VALIDATION_SET_SIZE}-gene
-                  validated set of gene–cell-line associations from the
+                  validated set of gene, cell-line associations from the
                   literature. <strong>RNA Expression</strong> measures
                   transcript abundance across HPA and DepMap;{' '}
                   <strong>Protein</strong> measures protein abundance from
@@ -559,8 +554,8 @@ export default function Search() {
                   (checking whether a gene's KEGG pathway-neighbor genes
                   are also expressed in a cell line) was tested via four
                   separate methods and found NOT to improve ranking
-                  accuracy — post-translational activation mechanisms
-                  aren't visible to transcriptional co-expression scoring —
+                  accuracy, since post-translational activation mechanisms
+                  aren't visible to transcriptional co-expression scoring,
                   so it is not part of the active weighting above.{' '}
                   <strong>Graph Centrality (RWR)</strong>, a structurally
                   different approach that captures network proximity
@@ -590,7 +585,7 @@ export default function Search() {
 
             <div className="flex items-center justify-between mb-6">
               <div>
-                <div className="text-[#1D1D1F] font-bold text-lg">
+                <div className="text-[#1A1A1A] font-bold text-lg">
                   Showing {displayedResults?.results.length} of {allResults.results?.length} loaded for{' '}
                   <span className="font-mono">
                     {isMultiGene
@@ -598,12 +593,12 @@ export default function Search() {
                       : allResults.query?.gene}
                   </span>
                   {allResults.query?.disease_filter && (
-                    <span className="text-[#6E6E73] text-sm font-normal ml-2">
+                    <span className="text-[#6B6B6B] text-sm font-normal ml-2">
                       in {allResults.query.disease_filter}
                     </span>
                   )}
                 </div>
-                <div className="text-[#6E6E73] text-xs mt-0.5 font-mono">
+                <div className="text-[#6B6B6B] text-xs mt-0.5 font-mono">
                   {isMultiGene
                     ? `${allResults.metadata?.n_excluded_missing_data ?? 0} lines excluded (missing data for ≥1 gene)`
                     : `${allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored`}
@@ -613,17 +608,17 @@ export default function Search() {
               <div className="relative" ref={exportMenuRef}>
                 <button
                   onClick={() => setExportOpen(o => !o)}
-                  className="text-xs border border-[#D2D2D7] text-[#6E6E73] hover:text-[#1D1D1F] hover:border-[#1D1D1F] px-3 py-1.5 rounded-lg transition-colors"
+                  className="text-xs border border-[#E5E3DD] text-[#6B6B6B] hover:text-[#1A1A1A] hover:border-[#1A1A1A] px-3 py-1.5 rounded transition-colors"
                 >
-                  Export ▾
+                  Export
                 </button>
                 {exportOpen && (
-                  <div className="absolute right-0 mt-2 w-32 bg-white border border-[#D2D2D7] rounded-lg shadow-lg z-10 overflow-hidden">
+                  <div className="absolute right-0 mt-2 w-32 bg-cso-card border border-[#E5E3DD] rounded z-10 overflow-hidden">
                     {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
                       <button
                         key={label}
                         onClick={() => { fn(); setExportOpen(false) }}
-                        className="w-full text-left px-4 py-2 hover:bg-[#F5F5F7] text-sm text-[#1D1D1F] transition-colors"
+                        className="w-full text-left px-4 py-2 hover:bg-[#F7F6F2] text-sm text-[#1A1A1A] transition-colors"
                       >
                         {label}
                       </button>
@@ -641,6 +636,7 @@ export default function Search() {
                   gene={allResults.query?.gene ?? gene}
                   additionalGenes={allResults.query?.additional_genes}
                   diseaseFilter={allResults.query?.disease_filter}
+                  lineageFilter={allResults.query?.lineage_filter}
                   excludeGenes={
                     excludeGenes
                       ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -652,23 +648,23 @@ export default function Search() {
             </div>
 
             {/* Pathway-Connected Recommendations */}
-            <div className="mt-8 pt-8 border-t border-gray-200">
-              <h2 className="text-lg font-semibold mb-1">
+            <div className="mt-8 pt-8 border-t border-[#E5E3DD]">
+              <h2 className="text-[11px] uppercase tracking-[0.08em] font-semibold text-[#6B6B6B] mb-1">
                 Pathway-Connected Recommendations
               </h2>
-              <p className="text-xs text-[#6E6E73] mb-4">
+              <p className="text-xs text-[#6B6B6B] mb-4">
                 Cell lines strong for genes that share a
                 biological pathway with {allResults.query?.gene ?? gene}. These expand
                 your experimental options beyond direct{' '}
                 {allResults.query?.gene ?? gene} expression.
               </p>
               {pathwayResults === null ? (
-                <div className="text-xs text-[#6E6E73]">
-                  No pathway-connected data available for this gene yet — the knowledge
+                <div className="text-xs text-[#6B6B6B]">
+                  No pathway-connected data available for this gene yet: the knowledge
                   graph currently only covers a curated set of validation genes.
                 </div>
               ) : pathwayResults.length === 0 ? (
-                <div className="text-xs text-[#6E6E73]">
+                <div className="text-xs text-[#6B6B6B]">
                   No pathway-connected cell lines found for this gene.
                 </div>
               ) : (
@@ -678,26 +674,28 @@ export default function Search() {
                   return (
                     <div
                       key={r.cellosaurus_id}
-                      className="border rounded-lg p-3 mb-2 cursor-pointer hover:border-[#1D1D1F] transition-colors"
+                      className="border border-[#E5E3DD] rounded p-3 mb-2 cursor-pointer hover:border-[#0F766E] transition-colors"
                       onClick={() => setSelectedCVCL(r.cellosaurus_id)}
                     >
                       <div className="flex justify-between">
                         <div>
-                          <span className="font-medium">
+                          <span className="font-medium text-[#1A1A1A] text-sm">
                             {r.official_name ?? r.cellosaurus_id}
                           </span>
                           {top && (
                             <span
-                              className={`ml-2 text-xs px-2 py-0.5 rounded ${
-                                isDirect ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'
-                              }`}
+                              className="ml-2 text-xs px-2 py-0.5 rounded border"
+                              style={{
+                                color: isDirect ? '#B45309' : '#9A9691',
+                                borderColor: isDirect ? '#B45309' : '#E5E3DD',
+                              }}
                             >
                               {isDirect ? `direct: ${top.gene}` : `via ${top.gene}`}
                             </span>
                           )}
                         </div>
-                        <span className="text-sm">
-                          score {(r.max_score ?? 0).toFixed(2)}
+                        <span className="text-sm font-mono text-[#1A1A1A]">
+                          {(r.max_score ?? 0).toFixed(2)}
                         </span>
                       </div>
                     </div>
@@ -711,10 +709,10 @@ export default function Search() {
         {/* Empty state */}
         {!allResults && !loading && !error && (
           <div className="text-center py-24">
-            <div className="text-[#D2D2D7] text-6xl mb-5">⬡</div>
-            <div className="text-[#6E6E73] text-sm">
+            <div className="text-[#E5E3DD] text-6xl mb-5">⬡</div>
+            <div className="text-[#6B6B6B] text-sm">
               Enter a gene symbol above and press{' '}
-              <span className="text-[#1D1D1F] font-semibold">Run Analysis</span>
+              <span className="text-[#1A1A1A] font-semibold">Run Analysis</span>
             </div>
           </div>
         )}

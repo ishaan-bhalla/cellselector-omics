@@ -138,7 +138,7 @@ export default function DNAHelix({ mousePos }: Props) {
           line.setAttribute('y1', pos1[idx].y.toFixed(1))
           line.setAttribute('x2', pos2[idx].x.toFixed(1))
           line.setAttribute('y2', pos2[idx].y.toFixed(1))
-          line.setAttribute('stroke', '#2D6A4F')
+          line.setAttribute('stroke', '#9A9691')
           line.setAttribute('opacity', rOp.toFixed(2))
         }
       })
@@ -179,21 +179,21 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`rung-${idx}`}
           ref={el => { rungRefs.current[ri] = el }}
           x1="-2000" y1="-2000" x2="-2000" y2="-2000"
-          stroke="#2D6A4F" strokeWidth="2"
+          stroke="#9A9691" strokeWidth="2"
         />
       ))}
 
-      {/* Strand 1 — red */}
+      {/* Strand 1 — teal */}
       <path
         ref={strand1Ref} d="M -2000 -2000"
-        fill="none" stroke="#E63946" strokeWidth="3"
+        fill="none" stroke="#0F766E" strokeWidth="3"
         strokeLinecap="round" opacity="0.9"
       />
 
-      {/* Strand 2 — blue */}
+      {/* Strand 2 — amber */}
       <path
         ref={strand2Ref} d="M -2000 -2000"
-        fill="none" stroke="#457B9D" strokeWidth="3"
+        fill="none" stroke="#B45309" strokeWidth="3"
         strokeLinecap="round" opacity="0.9"
       />
 
@@ -203,7 +203,7 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`d1-${idx}`}
           ref={el => { dot1Refs.current[ni] = el }}
           cx="-2000" cy="-2000" r="3"
-          fill="white" stroke="#E63946" strokeWidth="1.5"
+          fill="#FAF9F6" stroke="#0F766E" strokeWidth="1.5"
         />
       ))}
 
@@ -213,11 +213,12 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`d2-${idx}`}
           ref={el => { dot2Refs.current[ni] = el }}
           cx="-2000" cy="-2000" r="3"
-          fill="white" stroke="#457B9D" strokeWidth="1.5"
+          fill="#FAF9F6" stroke="#B45309" strokeWidth="1.5"
         />
       ))}
 
-      {/* Gene labels — opacity driven by RAF hover check */}
+      {/* Gene labels — opacity driven by RAF hover check. Hairline border
+          instead of a drop shadow for separation from the strands behind. */}
       {LABEL_IDX.map((idx, li) => (
         <g
           key={`label-${idx}`}
@@ -226,14 +227,13 @@ export default function DNAHelix({ mousePos }: Props) {
           style={{ pointerEvents: 'none' }}
         >
           <rect
-            x="-2000" y="-2000" width="48" height="14" rx="7"
-            fill="white" fillOpacity="0.95"
-            filter="drop-shadow(0 1px 3px rgba(0,0,0,0.12))"
+            x="-2000" y="-2000" width="48" height="14" rx="3"
+            fill="#FAF9F6" stroke="#E5E3DD" strokeWidth="1"
           />
           <text
             x="-2000" y="-2000"
-            textAnchor="middle" fill="#1D1D1F"
-            fontSize="8" fontFamily="ui-monospace, monospace" fontWeight="600"
+            textAnchor="middle" fill="#1A1A1A"
+            fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="600"
           >
             {GENE_LABELS[idx]}
           </text>

@@ -7,7 +7,7 @@ import Data from './pages/Data'
 
 export default function App() {
   return (
-    <div className="bg-white text-[#1D1D1F]">
+    <div className="bg-cso-bg text-[#1A1A1A] min-h-screen font-sans">
       <Navbar />
       <Routes>
         <Route path="/"       element={<Home />}   />
