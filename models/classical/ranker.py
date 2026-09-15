@@ -390,6 +390,18 @@ def rank(
         print(f"[ranker] RWR scoring failed: {exc}")
         result["rwr_score"] = 0.0
 
+    # NOTE: a metapath-guided graph signal (models/classical/metapath_scorer.py)
+    # was fully validated here (grid search -> full evaluation ->
+    # cross-validated_evaluation.py -> paired bootstrap significance test,
+    # 10,000 resamples, see scripts/evaluation/metapath_*.py) and found NOT
+    # significant (overall LOO-CV diff +0.0044, p=0.80, 95% CI
+    # [-0.039, +0.043] — crosses zero even in the seemingly-promising
+    # tissue_specific class, p=0.27). Deliberately not wired in here as a
+    # column/weight, unlike rwr_score above — this is a documented,
+    # thoroughly-tested NEGATIVE result, not an oversight. See the
+    # evaluation scripts for the full methodology if this is ever
+    # revisited (e.g. after further graph enrichment).
+
     if gene_class == "loss_of_function" and "mutation" in weights:
         # Mutation-primary LOF vector {mutation, rna, protein, quality,
         # context} (no pathway) — see weights_learned._apply_lof_mutation_weight.
