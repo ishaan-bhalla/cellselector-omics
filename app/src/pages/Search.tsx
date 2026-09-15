@@ -24,6 +24,17 @@ const LOADING_LINES = [
 // an oversight; update this if VALIDATION_SET's size changes again.
 const VALIDATION_SET_SIZE = 44
 
+// Safety cap on multi-gene search size, mirroring api/models.py's
+// MAX_ADDITIONAL_GENES. NOT a permanent feature limit — the parallelized
+// multi-gene rank() fetch (models.classical.multi_gene_ranker) was only
+// load-tested up to 2 total genes; that test showed the server's memory
+// spiking to ~57% of the VM's total before releasing. Beyond that is
+// unverified, so the backend rejects (422) anything over this cap and the
+// UI hides "+ Add another gene" at the same point rather than letting a
+// user hit that rejection. Keep this in sync with the backend value —
+// raise only after isolated, memory-capped testing confirms headroom.
+const MAX_ADDITIONAL_GENES = 1
+
 // Active Fit Score weight components this panel can describe — deliberately
 // does NOT include "pathway": pathway-coherence scoring (KEGG
 // pathway-neighbor co-expression) was tested via four separate aggregation
@@ -199,7 +210,12 @@ export default function Search() {
   const addAdditionalGene = (g: string) => {
     setAdditionalGeneDraft('')
     if (g === gene || additionalGenes.includes(g)) return
-    setAdditionalGenes(prev => [...prev, g])
+    // Defensive guard matching the cap enforced above (the add UI is
+    // hidden once the cap is reached, so this shouldn't normally fire,
+    // but keeps this function safe to call from anywhere).
+    setAdditionalGenes(prev =>
+      prev.length >= MAX_ADDITIONAL_GENES ? prev : [...prev, g]
+    )
   }
 
   const removeAdditionalGene = (g: string) => {
@@ -405,7 +421,18 @@ export default function Search() {
               </div>
             )}
 
-            {showAddGene ? (
+            {additionalGenes.length >= MAX_ADDITIONAL_GENES ? (
+              // Cap reached — hide the add control entirely rather than a
+              // disabled button, with a brief explanation so it's clear
+              // this is a deliberate limit, not a missing feature. Mirrors
+              // the backend's rejection message in api/models.py.
+              <p
+                className="mt-2 text-xs text-[#6E6E73]"
+                title="Temporary memory-safety limit on this server, not a permanent feature restriction."
+              >
+                Maximum {MAX_ADDITIONAL_GENES + 1} genes per search
+              </p>
+            ) : showAddGene ? (
               <div className="relative mt-2 max-w-xs">
                 <GeneAutocompleteInput
                   value={additionalGeneDraft}
