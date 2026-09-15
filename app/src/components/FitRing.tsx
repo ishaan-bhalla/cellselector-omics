@@ -24,11 +24,11 @@ export default function FitRing({ score, size = 76, label = 'FIT SCORE' }: Props
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         <circle
           cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke="#E5E3DD" strokeWidth={stroke}
+          fill="none" stroke="var(--border)" strokeWidth={stroke}
         />
         <circle
           cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke="#0F766E" strokeWidth={stroke}
+          fill="none" stroke="var(--accent)" strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${c - dash}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
@@ -40,7 +40,7 @@ export default function FitRing({ score, size = 76, label = 'FIT SCORE' }: Props
           fontFamily="'IBM Plex Mono', monospace"
           fontSize={size * 0.26}
           fontWeight={600}
-          fill="#1A1A1A"
+          fill="var(--text-heading)"
         >
           {pct}
         </text>

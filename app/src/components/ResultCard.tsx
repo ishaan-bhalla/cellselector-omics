@@ -82,10 +82,10 @@ function parseJustification(text: string): Record<string, string> {
 // Three-state palette (see Part 4 of the design spec) reused for evidence
 // level labels (High/Medium/Low/Confirms/Contradicts), not just metric bars.
 function levelColor(level: string): string {
-  if (level === 'High' || level === 'Confirms') return '#0F766E'
-  if (level === 'Medium') return '#B45309'
-  if (level === 'Low' || level === 'Contradicts') return '#9A9691'
-  return '#9A9691'
+  if (level === 'High' || level === 'Confirms') return 'var(--accent)'
+  if (level === 'Medium') return 'var(--accent-amber)'
+  if (level === 'Low' || level === 'Contradicts') return 'var(--muted-state)'
+  return 'var(--muted-state)'
 }
 
 function Section({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {

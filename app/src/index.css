@@ -10,8 +10,41 @@ html {
   scroll-behavior: smooth;
 }
 
+/* ── Dual-theme tokens ─────────────────────────────────────────────────────
+   Dark is the default (:root, no class needed) — matches this app's
+   opt-IN light mode, not Tailwind's own opt-in-dark convention. Toggling
+   the `light` class on <html> (see ThemeToggle.tsx / theme.ts) swaps every
+   token below instantly; every cso-* Tailwind color resolves through these
+   (see tailwind.config.js), so no component needs its own dark:/light:
+   variant classes.
+   Same prohibitions apply to both sets: no pure #000/#FFF, no purple, no
+   neon, no pastel, no gradients beyond one subtle 2-stop teal one, no
+   drop shadows, no soft/large radii, no blur/glassmorphism. */
+:root {
+  --bg:           #0A0A0A;
+  --bg-card:      #151515;
+  --border:       #2A2A2A;
+  --accent:       #14B8A6;
+  --accent-amber: #D97706;
+  --muted-state:  #4A4A47;
+  --text-heading: #F5F5F0;
+  --text-body:    #8A8A85;
+}
+
+:root.light {
+  --bg:           #F7F6F2;
+  --bg-card:      #FAF9F6;
+  --border:       #E5E3DD;
+  --accent:       #0F766E;
+  --accent-amber: #B45309;
+  --muted-state:  #9A9691;
+  --text-heading: #1A1A1A;
+  --text-body:    #6B6B6B;
+}
+
 body {
-  background: #F7F6F2;
-  color: #1A1A1A;
+  background: var(--bg);
+  color: var(--text-heading);
   font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }

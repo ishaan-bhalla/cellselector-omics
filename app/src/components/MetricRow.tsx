@@ -10,9 +10,9 @@ export const METRIC_INFO: Record<string, { label: string; description: string }>
 }
 
 function barColor(value: number): string {
-  if (value >= 0.66) return '#0F766E'
-  if (value >= 0.33) return '#B45309'
-  return '#9A9691'
+  if (value >= 0.66) return 'var(--accent)'
+  if (value >= 0.33) return 'var(--accent-amber)'
+  return 'var(--muted-state)'
 }
 
 interface Props {
@@ -48,7 +48,7 @@ export default function MetricRow({ metric, value, tooltip }: Props) {
         </>
       ) : (
         <>
-          <div className="flex-1 h-1 rounded-sm overflow-hidden" style={{ background: '#E5E3DD' }}>
+          <div className="flex-1 h-1 rounded-sm overflow-hidden" style={{ background: 'var(--border)' }}>
             <div
               style={{ width: `${pct}%`, background: barColor(clamped), height: '100%', transition: 'width 0.4s ease' }}
             />

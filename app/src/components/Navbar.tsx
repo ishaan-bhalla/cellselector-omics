@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
+import ThemeToggle from './ThemeToggle'
 
 const LINK_BASE = 'text-sm font-medium transition-colors px-1'
 
@@ -8,7 +9,7 @@ export default function Navbar() {
   return (
     <nav
       className="sticky top-0 z-50 bg-cso-bg"
-      style={{ borderBottom: '1px solid #E5E3DD' }}
+      style={{ borderBottom: '1px solid var(--border)' }}
     >
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         {/* Left — wordmark */}
@@ -41,15 +42,17 @@ export default function Navbar() {
           ))}
         </div>
 
-        {/* Right — version tag + partnership line */}
+        {/* Right — version tag + partnership line + theme toggle */}
         <div className="flex items-center gap-4">
           <span className="hidden sm:inline text-[11px] text-cso-body">
             Bristol &times; AstraZeneca
           </span>
           <span className="font-mono text-[11px] text-cso-body">v1.0</span>
+          <ThemeToggle />
           <button
             onClick={() => navigate('/search')}
-            className="flex items-center gap-1.5 text-xs font-medium text-cso-card bg-cso-teal px-3 py-1.5 rounded hover:bg-[#0D655E] transition-colors"
+            className="flex items-center gap-1.5 text-xs font-medium bg-cso-teal px-3 py-1.5 rounded hover:brightness-90 transition-all"
+            style={{ color: 'var(--bg)' }}
           >
             Search
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

@@ -54,7 +54,7 @@ export default function Home() {
     <div className="bg-cso-bg">
 
       {/* ── Hero ── */}
-      <section style={{ position: 'relative', height: 'calc(100vh - 65px)', minHeight: 480, overflow: 'hidden', background: '#F7F6F2' }}>
+      <section style={{ position: 'relative', height: 'calc(100vh - 65px)', minHeight: 480, overflow: 'hidden', background: 'var(--bg)' }}>
 
         {/* Zone 1 — DNA helix, left 55% */}
         <div
@@ -73,7 +73,7 @@ export default function Home() {
           style={{
             position: 'absolute', left: '55%', top: '10%',
             height: '80%', width: 1, pointerEvents: 'none',
-            background: 'linear-gradient(to bottom, transparent, #E5E3DD 20%, #E5E3DD 80%, transparent)',
+            background: 'linear-gradient(to bottom, transparent, var(--border) 20%, var(--border) 80%, transparent)',
           }}
         />
 
@@ -84,20 +84,20 @@ export default function Home() {
             width: '45%', height: '100%',
             display: 'flex', flexDirection: 'column', justifyContent: 'center',
             padding: '0 60px 0 40px',
-            background: '#F7F6F2',
+            background: 'var(--bg)',
           }}
         >
           <p style={{
-            fontFamily: "'IBM Plex Mono', monospace", color: '#6B6B6B',
+            fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-body)',
             fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase',
             marginBottom: 24,
           }}>
             University of Bristol &times; AstraZeneca
           </p>
-          <h1 style={{ color: '#1A1A1A', fontSize: 56, fontWeight: 700, lineHeight: 1.1, marginBottom: 20 }}>
+          <h1 style={{ color: 'var(--text-heading)', fontSize: 56, fontWeight: 700, lineHeight: 1.1, marginBottom: 20 }}>
             Find the right<br />cell line.
           </h1>
-          <p style={{ color: '#6B6B6B', fontSize: 17, lineHeight: 1.6, maxWidth: 380, marginBottom: 40 }}>
+          <p style={{ color: 'var(--text-body)', fontSize: 17, lineHeight: 1.6, maxWidth: 380, marginBottom: 40 }}>
             Multi-omics recommendation across 2,076 human cell lines,
             evidence-backed and citable.
           </p>
@@ -105,7 +105,7 @@ export default function Home() {
             <Link
               to="/search"
               style={{
-                background: '#0F766E', color: '#FAF9F6',
+                background: 'var(--accent)', color: 'var(--bg-card)',
                 borderRadius: 4, padding: '13px 26px',
                 fontWeight: 600, fontSize: 14,
                 textDecoration: 'none', display: 'inline-block',
@@ -116,8 +116,8 @@ export default function Home() {
             <Link
               to="/about"
               style={{
-                background: 'transparent', border: '1px solid #E5E3DD',
-                color: '#1A1A1A', borderRadius: 4, padding: '13px 26px',
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text-heading)', borderRadius: 4, padding: '13px 26px',
                 fontSize: 14, textDecoration: 'none', display: 'inline-block',
               }}
             >
@@ -133,7 +133,7 @@ export default function Home() {
           className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 z-10"
           style={{ pointerEvents: 'none' }}
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#6B6B6B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-body)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M3 6l5 5 5-5" />
           </svg>
           <span className="text-[10px] font-mono uppercase tracking-[0.15em] text-cso-body">Scroll</span>
@@ -141,7 +141,7 @@ export default function Home() {
       </section>
 
       {/* ── Stats ── */}
-      <section className="bg-cso-card py-14" style={{ borderTop: '1px solid #E5E3DD', borderBottom: '1px solid #E5E3DD' }}>
+      <section className="bg-cso-card py-14" style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
         <div className="max-w-5xl mx-auto px-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
             {statItems.map(s => (
@@ -172,7 +172,7 @@ export default function Home() {
       </section>
 
       {/* ── Steps ── */}
-      <section className="bg-cso-card py-20" style={{ borderTop: '1px solid #E5E3DD', borderBottom: '1px solid #E5E3DD' }}>
+      <section className="bg-cso-card py-20" style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
         <div className="max-w-5xl mx-auto px-6">
           <h2 className="text-cso-heading text-3xl font-bold mb-12 text-center">How to use it</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">

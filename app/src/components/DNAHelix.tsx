@@ -138,7 +138,7 @@ export default function DNAHelix({ mousePos }: Props) {
           line.setAttribute('y1', pos1[idx].y.toFixed(1))
           line.setAttribute('x2', pos2[idx].x.toFixed(1))
           line.setAttribute('y2', pos2[idx].y.toFixed(1))
-          line.setAttribute('stroke', '#9A9691')
+          line.setAttribute('stroke', 'var(--muted-state)')
           line.setAttribute('opacity', rOp.toFixed(2))
         }
       })
@@ -179,21 +179,21 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`rung-${idx}`}
           ref={el => { rungRefs.current[ri] = el }}
           x1="-2000" y1="-2000" x2="-2000" y2="-2000"
-          stroke="#9A9691" strokeWidth="2"
+          stroke="var(--muted-state)" strokeWidth="2"
         />
       ))}
 
       {/* Strand 1 — teal */}
       <path
         ref={strand1Ref} d="M -2000 -2000"
-        fill="none" stroke="#0F766E" strokeWidth="3"
+        fill="none" stroke="var(--accent)" strokeWidth="3"
         strokeLinecap="round" opacity="0.9"
       />
 
       {/* Strand 2 — amber */}
       <path
         ref={strand2Ref} d="M -2000 -2000"
-        fill="none" stroke="#B45309" strokeWidth="3"
+        fill="none" stroke="var(--accent-amber)" strokeWidth="3"
         strokeLinecap="round" opacity="0.9"
       />
 
@@ -203,7 +203,7 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`d1-${idx}`}
           ref={el => { dot1Refs.current[ni] = el }}
           cx="-2000" cy="-2000" r="3"
-          fill="#FAF9F6" stroke="#0F766E" strokeWidth="1.5"
+          fill="var(--bg-card)" stroke="var(--accent)" strokeWidth="1.5"
         />
       ))}
 
@@ -213,7 +213,7 @@ export default function DNAHelix({ mousePos }: Props) {
           key={`d2-${idx}`}
           ref={el => { dot2Refs.current[ni] = el }}
           cx="-2000" cy="-2000" r="3"
-          fill="#FAF9F6" stroke="#B45309" strokeWidth="1.5"
+          fill="var(--bg-card)" stroke="var(--accent-amber)" strokeWidth="1.5"
         />
       ))}
 
@@ -228,11 +228,11 @@ export default function DNAHelix({ mousePos }: Props) {
         >
           <rect
             x="-2000" y="-2000" width="48" height="14" rx="3"
-            fill="#FAF9F6" stroke="#E5E3DD" strokeWidth="1"
+            fill="var(--bg-card)" stroke="var(--border)" strokeWidth="1"
           />
           <text
             x="-2000" y="-2000"
-            textAnchor="middle" fill="#1A1A1A"
+            textAnchor="middle" fill="var(--text-heading)"
             fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="600"
           >
             {GENE_LABELS[idx]}

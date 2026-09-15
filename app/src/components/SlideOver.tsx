@@ -46,7 +46,7 @@ export default function SlideOver({ cellosaurus_id, onClose }: Props) {
       {/* Panel — hairline border for separation, no drop shadow */}
       <div
         className="fixed right-0 top-0 h-full w-96 bg-cso-card z-50 overflow-y-auto"
-        style={{ borderLeft: '1px solid #E5E3DD' }}
+        style={{ borderLeft: '1px solid var(--border)' }}
       >
         <div className="p-6">
           {/* Header */}
@@ -55,19 +55,19 @@ export default function SlideOver({ cellosaurus_id, onClose }: Props) {
               {loading ? (
                 <LoadingSpinner text="Fetching cell line…" />
               ) : error ? (
-                <p className="text-[#B45309] text-sm">Failed to load cell line data.</p>
+                <p className="text-[var(--accent-amber)] text-sm">Failed to load cell line data.</p>
               ) : (
                 <>
-                  <h2 className="text-[#1A1A1A] font-bold text-xl leading-tight truncate pr-2">
+                  <h2 className="text-[var(--text-heading)] font-bold text-xl leading-tight truncate pr-2">
                     {data?.official_name}
                   </h2>
-                  <span className="text-[#6B6B6B] font-mono text-sm">{cellosaurus_id}</span>
+                  <span className="text-[var(--text-body)] font-mono text-sm">{cellosaurus_id}</span>
                 </>
               )}
             </div>
             <button
               onClick={onClose}
-              className="text-[#6B6B6B] hover:text-[#1A1A1A] ml-2 mt-0.5 flex-shrink-0 transition-colors"
+              className="text-[var(--text-body)] hover:text-[var(--text-heading)] ml-2 mt-0.5 flex-shrink-0 transition-colors"
               aria-label="Close"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
@@ -80,14 +80,14 @@ export default function SlideOver({ cellosaurus_id, onClose }: Props) {
             <>
               {/* Context */}
               <div className="mb-6">
-                <div className="text-[#6B6B6B] text-xs uppercase tracking-widest mb-2">Context</div>
-                <div className="text-[#1A1A1A] text-sm">{data.disease || 'n/a'}</div>
-                <div className="text-[#6B6B6B] text-xs mt-0.5">{data.lineage || 'n/a'}</div>
+                <div className="text-[var(--text-body)] text-xs uppercase tracking-widest mb-2">Context</div>
+                <div className="text-[var(--text-heading)] text-sm">{data.disease || 'n/a'}</div>
+                <div className="text-[var(--text-body)] text-xs mt-0.5">{data.lineage || 'n/a'}</div>
               </div>
 
               {/* Coverage */}
               <div className="mb-6">
-                <div className="text-[#6B6B6B] text-xs uppercase tracking-widest mb-3">Data Coverage</div>
+                <div className="text-[var(--text-body)] text-xs uppercase tracking-widest mb-3">Data Coverage</div>
                 <div className="grid grid-cols-2 gap-y-2 gap-x-4">
                   {Object.entries(COVERAGE_LABELS).map(([key, label]) => {
                     const has = Boolean(data.data_coverage?.[key])
@@ -95,9 +95,9 @@ export default function SlideOver({ cellosaurus_id, onClose }: Props) {
                       <div key={key} className="flex items-center gap-2">
                         <span
                           className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                          style={{ background: has ? '#0F766E' : 'transparent', border: has ? 'none' : '1px solid #E5E3DD' }}
+                          style={{ background: has ? 'var(--accent)' : 'transparent', border: has ? 'none' : '1px solid var(--border)' }}
                         />
-                        <span className={`text-xs ${has ? 'text-[#1A1A1A]' : 'text-[#9A9691]'}`}>{label}</span>
+                        <span className={`text-xs ${has ? 'text-[var(--text-heading)]' : 'text-[var(--muted-state)]'}`}>{label}</span>
                       </div>
                     )
                   })}
@@ -107,21 +107,21 @@ export default function SlideOver({ cellosaurus_id, onClose }: Props) {
               {/* Genomic features */}
               {data.genomic_features && Object.keys(data.genomic_features).length > 0 && (
                 <div className="mb-6">
-                  <div className="text-[#6B6B6B] text-xs uppercase tracking-widest mb-3">Genomic Features</div>
+                  <div className="text-[var(--text-body)] text-xs uppercase tracking-widest mb-3">Genomic Features</div>
                   {Object.entries(data.genomic_features as Record<string, number | null>).map(([key, val]) =>
                     val != null ? <ScoreBar key={key} label={key} value={val} /> : null
                   )}
                 </div>
               )}
 
-              <div className="mb-5 text-xs text-[#6B6B6B]">
-                Evidence entries: <span className="text-[#1A1A1A] font-mono">{data.evidence_count ?? 'n/a'}</span>
+              <div className="mb-5 text-xs text-[var(--text-body)]">
+                Evidence entries: <span className="text-[var(--text-heading)] font-mono">{data.evidence_count ?? 'n/a'}</span>
               </div>
 
               <a
                 href={data.cellosaurus_url}
                 target="_blank" rel="noopener noreferrer"
-                className="inline-block border border-[#E5E3DD] text-[#1A1A1A] text-sm px-4 py-2 rounded hover:border-[#1A1A1A] transition-colors"
+                className="inline-block border border-[var(--border)] text-[var(--text-heading)] text-sm px-4 py-2 rounded hover:border-[var(--text-heading)] transition-colors"
               >
                 View on Cellosaurus ↗
               </a>
