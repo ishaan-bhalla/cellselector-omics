@@ -1,6 +1,5 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { api } from '../api/client'
-import { loadSearchResults, saveSearchResults } from '../utils/searchState'
 
 // Item 3 — lifts the classical-search AND per-card agentic-justification
 // fetch lifecycle out of Search.tsx / ResultCard.tsx (which unmount on
@@ -71,19 +70,51 @@ interface SearchContextValue {
   // the same way the main search does.
   agenticByCellLine: Record<string, AgenticState>
   runAgenticJustification: (params: AgenticParams) => Promise<void>
+  // Form-field state (what the user is about to search, as opposed to
+  // `classical` above, what they last searched and got back). Lives here
+  // as plain in-memory React state — same rationale as classical/
+  // agenticByCellLine: surviving in-app navigation is exactly what
+  // Provider-level state gives for free (mounted above the router, so it
+  // isn't torn down when Search.tsx unmounts), and NOT persisting to
+  // sessionStorage is what makes a hard refresh correctly reset to a
+  // fresh query instead of restoring stale typed-in values.
+  gene: string
+  setGene: Dispatch<SetStateAction<string>>
+  additionalGenes: string[]
+  setAdditionalGenes: Dispatch<SetStateAction<string[]>>
+  diseaseFilter: string
+  setDiseaseFilter: Dispatch<SetStateAction<string>>
+  excludeGenes: string[]
+  setExcludeGenes: Dispatch<SetStateAction<string[]>>
+  topN: number
+  setTopN: Dispatch<SetStateAction<number>>
 }
 
 const SearchContext = createContext<SearchContextValue | null>(null)
 
 export function SearchProvider({ children }: { children: ReactNode }) {
-  // Seeded from sessionStorage once on provider mount (which happens once
-  // per app session, at App.tsx — not per Search.tsx visit), same initial
-  // values Search.tsx used to seed its own local state with directly.
-  const [results, setResults] = useState<any | null>(() => loadSearchResults())
+  // Plain in-memory state, no sessionStorage — this is what makes a hard
+  // refresh reset to empty (JS memory is wiped and this Provider remounts
+  // fresh) while still surviving in-app navigation (mounted above the
+  // router, so it's never torn down just from leaving /search). An
+  // earlier version of this file seeded/persisted `results` via
+  // sessionStorage (Item 6) — that's been removed: it meant a hard
+  // refresh incorrectly restored the previous results, the exact bug this
+  // fix targets, just for `results` instead of the form fields.
+  const [results, setResults] = useState<any | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadLine, setLoadLine] = useState(0)
   const [agenticByCellLine, setAgenticByCellLine] = useState<Record<string, AgenticState>>({})
+
+  // Form-field state — see the SearchContextValue docstring above. Plain
+  // in-memory state for the same reason as `results`: no sessionStorage,
+  // so it resets on a hard refresh but survives in-app navigation.
+  const [gene, setGene] = useState('')
+  const [additionalGenes, setAdditionalGenes] = useState<string[]>([])
+  const [diseaseFilter, setDiseaseFilter] = useState('')
+  const [excludeGenes, setExcludeGenes] = useState<string[]>([])
+  const [topN, setTopN] = useState(10)
 
   // Drives the staged console-line reveal independent of whether Search
   // is currently mounted — see the module docstring above.
@@ -92,17 +123,6 @@ export function SearchProvider({ children }: { children: ReactNode }) {
     const id = setInterval(() => setLoadLine(l => Math.min(l + 1, LOADING_LINES.length - 1)), 650)
     return () => clearInterval(id)
   }, [loading])
-
-  // Item 6's sessionStorage results-persistence now lives here (moved out
-  // of Search.tsx) rather than being duplicated in both places — see the
-  // "don't leave two competing persistence mechanisms" note in the task.
-  // Search.tsx's OWN sessionStorage effect still covers the draft form
-  // fields (gene typed so far, filters, etc.) — a genuinely different
-  // concern (what you're about to search) from this (what you last
-  // searched and got back), so both coexist without conflicting.
-  useEffect(() => {
-    saveSearchResults(results)
-  }, [results])
 
   // Guards a genuine race: if a second search starts before the first
   // resolves, only the LATEST call's result should ever be committed.
@@ -156,6 +176,11 @@ export function SearchProvider({ children }: { children: ReactNode }) {
         runClassicalSearch,
         agenticByCellLine,
         runAgenticJustification,
+        gene, setGene,
+        additionalGenes, setAdditionalGenes,
+        diseaseFilter, setDiseaseFilter,
+        excludeGenes, setExcludeGenes,
+        topN, setTopN,
       }}
     >
       {children}

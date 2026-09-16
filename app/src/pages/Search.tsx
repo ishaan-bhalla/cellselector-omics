@@ -7,7 +7,6 @@ import SlideOver from '../components/SlideOver'
 import Reveal from '../components/Reveal'
 import AutocompleteInput from '../components/AutocompleteInput'
 import type { ViewMode } from '../utils/viewMode'
-import { loadSearchForm, saveSearchForm } from '../utils/searchState'
 import { useSearch, LOADING_LINES } from '../context/SearchContext'
 
 // Safety cap on multi-gene search size, mirroring api/models.py's
@@ -26,34 +25,40 @@ interface Props {
 }
 
 export default function Search({ viewMode }: Props) {
-  // Item 6: each lazy initializer reads sessionStorage exactly once, on
-  // mount — see utils/searchState.ts. Restores the previous query/
-  // filters/results after navigating Search -> Home/About/Data -> Search.
-  const [gene, setGene] = useState(() => loadSearchForm().gene ?? '')
+  // Form-field state (gene/additionalGenes/diseaseFilter/excludeGenes/
+  // topN) now lives in SearchContext, the same place loading/results/
+  // error/loadLine already did — see the module docstring on
+  // SearchContext.tsx. That's what makes it survive Search -> Home/About/
+  // Data -> Search navigation (the Provider is mounted above the router,
+  // so it isn't torn down) while still resetting to empty on a hard
+  // refresh (plain in-memory state, no sessionStorage — a hard refresh
+  // wipes JS memory and remounts the Provider fresh). This replaces the
+  // old sessionStorage-backed version (Item 6), which persisted across a
+  // hard refresh too and incorrectly restored a stale typed-in query.
+  const {
+    classical, runClassicalSearch,
+    gene, setGene,
+    additionalGenes, setAdditionalGenes,
+    diseaseFilter, setDiseaseFilter,
+    excludeGenes, setExcludeGenes,
+    topN, setTopN,
+  } = useSearch()
+  // `results` is aliased to `allResults` so the rest of this file (written
+  // before the Item 3 refactor) needs no further renaming below.
+  const { loading, error: fetchError, results: allResults, loadLine } = classical
   // Per-gene stats (found/sources/cell-line count) for the gene actually
   // SELECTED from the dropdown — no longer fetched per keystroke, so
   // there's no async request in flight during typing to race against.
+  // UI-only (not part of what the task scoped into SearchContext), so it
+  // stays local — a hard refresh or fresh Search mount just re-fetches it
+  // from the (context-persisted) `gene` value, see the mount effect below.
   const [geneInfo, setGeneInfo] = useState<any>(null)
   const [geneLoading, setGeneLoading] = useState(false)
-  const [diseaseFilter, setDiseaseFilter] = useState(() => loadSearchForm().diseaseFilter ?? '')
   // Tissue Type (lineage_filter) removed per user testing feedback — see
   // the Item 4 note further down at the request-building call site for
   // what was checked before removing it.
-  const [excludeGenes, setExcludeGenes] = useState<string[]>(() => loadSearchForm().excludeGenes ?? [])
   const [excludeGeneDraft, setExcludeGeneDraft] = useState('')
   const [showAddExclude, setShowAddExclude] = useState(false)
-  // Clamped to 20 (Item 9, STEP 3 removed the "Top 50" option) — guards
-  // against a stale topN: 50 restored from a session persisted before
-  // this change, which the <select> below no longer offers as an option.
-  const [topN, setTopN] = useState(() => Math.min(loadSearchForm().topN ?? 10, 20))
-  // Item 3: loading/results/error/loadLine now live in SearchContext (see
-  // App.tsx), not local state — that's what makes an in-flight search
-  // survive navigating away from this page and back, instead of being
-  // orphaned when this component unmounts. `results` is aliased to
-  // `allResults` so the rest of this file (written before this change)
-  // needs no further renaming below.
-  const { classical, runClassicalSearch } = useSearch()
-  const { loading, error: fetchError, results: allResults, loadLine } = classical
   // Pre-submit validation (e.g. "can't search for and exclude the same
   // gene") happens here, BEFORE runClassicalSearch is even called, so it
   // can't reuse the context's post-fetch `error` — kept as its own local
@@ -80,11 +85,12 @@ export default function Search({ viewMode }: Props) {
   // to cancel, just "is this response still the one we care about".
   const selectedGeneRef = useRef('')
   // Additional genes for a combined multi-gene search (see handleSearch's
-  // additional_genes wiring) — separate from `gene` (the primary), plus a
-  // draft for whatever's currently being typed in the "add another gene"
-  // box, which clears after each successful add (unlike the primary
-  // input, which keeps showing the selected gene).
-  const [additionalGenes, setAdditionalGenes] = useState<string[]>(() => loadSearchForm().additionalGenes ?? [])
+  // additional_genes wiring) — separate from `gene` (the primary; both
+  // now come from context, see above), plus a draft for whatever's
+  // currently being typed in the "add another gene" box, which clears
+  // after each successful add (unlike the primary input, which keeps
+  // showing the selected gene). The draft itself is UI-only (mid-typing,
+  // not a committed form value), so it stays local state.
   const [additionalGeneDraft, setAdditionalGeneDraft] = useState('')
   const [showAddGene, setShowAddGene] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
@@ -108,33 +114,22 @@ export default function Search({ viewMode }: Props) {
       .catch(() => setDiseases([]))
   }, [])
 
-  // Item 6: restores the "found, N sources, N cell lines" confirmation
-  // line for a gene carried over from a previous visit — geneInfo itself
-  // isn't persisted (not in the task's explicit scope list), so this
-  // just re-runs the same lookup selecting a gene already triggers,
-  // mount-only (the `[]` deps — this must NOT re-fire on every `gene`
-  // change, or it would clobber selectGene's own normal per-selection
-  // fetch).
+  // Restores the "found, N sources, N cell lines" confirmation line for a
+  // gene carried over from a previous in-app visit — geneInfo itself
+  // isn't context state (kept local, see above), so this just re-runs the
+  // same lookup selecting a gene already triggers, mount-only (the `[]`
+  // deps — this must NOT re-fire on every `gene` change, or it would
+  // clobber selectGene's own normal per-selection fetch). On a hard
+  // refresh `gene` itself is already reset to '' by SearchContext, so
+  // this simply does nothing that time — no separate reset needed here.
   useEffect(() => {
     if (gene) selectGene(gene)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Item 6: persists the search form (cheap, updates per keystroke) and
-  // the last-fetched results (potentially much larger, so kept in its own
-  // effect keyed only on allResults — doesn't re-serialize on every
-  // keystroke of an unrelated field) to sessionStorage, so navigating
-  // Search -> Home/About/Data -> Search restores the full previous state,
-  // not just the input values with an empty results area.
-  useEffect(() => {
-    saveSearchForm({ gene, additionalGenes, diseaseFilter, excludeGenes, topN })
-  }, [gene, additionalGenes, diseaseFilter, excludeGenes, topN])
-
-  // Results persistence (sessionStorage) now lives in SearchProvider —
-  // see the module docstring on SearchContext.tsx for why this doesn't
-  // conflict with the saveSearchForm effect above (different concern:
-  // what you're about to search, vs. what you last searched and got
-  // back).
+  // Form-field AND results persistence both now live entirely in
+  // SearchContext as plain in-memory state (no sessionStorage anywhere in
+  // this file any more) — see the module docstring on SearchContext.tsx.
 
   useEffect(() => {
     if (loading) {
