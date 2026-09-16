@@ -83,8 +83,8 @@ The classical model was assessed against a literature-curated validation set usi
 | Generative AI | Groq API (`gpt-oss-20b`) with local Ollama fallback; Entrez/PubMed, KEGG, Cellosaurus retrieval |
 | Knowledge graph | Neo4j (self-hosted, Cypher) |
 | Service | FastAPI, Uvicorn |
-| Interface | HTML / CSS / JavaScript |
-| Deployment | Docker |
+| Interface | TypeScript / JavaScript |
+| Deployment | Docker, GCP |
 
 ---
 
@@ -172,10 +172,6 @@ The system was built incrementally over four phases, tracked across 140 commits 
 | 4. Deployment hardening | Aug – Sep 2026 | Docker/self-hosted Neo4j; Groq API backend swap; FastAPI + React interface; production bug fixes and evaluation refinement |
 
 Full commit-by-commit detail: `git log`.
-
-## Project Management
-
-Team task tracking for the phases above lives on a shared [Kanban board](https://claude.ai/artifact/7u1uJFmjx1esHW1j1joioY), seeded from the current open items in this README's *Limitations and Future Work* and `docs/progress_log.md`.
 
 ## Contributors
 
