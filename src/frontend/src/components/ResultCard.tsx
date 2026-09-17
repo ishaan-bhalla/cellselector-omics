@@ -1,12 +1,28 @@
 import { useState } from 'react'
-import { api } from '../api/client'
-import ScoreBar from './ScoreBar'
+import FitRing from './FitRing'
+import MetricRow from './MetricRow'
+import LabelValueRow from './LabelValueRow'
+import HoverPopover from './HoverPopover'
+import FitScoreExplanation from './FitScoreExplanation'
+import { renderBold } from '../utils/renderBold'
+import { getScorePct, getSources, hasContextFilter as computeHasContextFilter, isMultiGeneResult } from '../utils/resultFields'
+import { useSearch } from '../context/SearchContext'
 
 interface Props {
   result: any
   gene: string
   diseaseFilter?: string
   excludeGenes?: string[]
+  // Multi-gene combined search — passed through to /recommend/agentic so
+  // the "Get AI Justification" button produces a joint justification
+  // (see generate_multi_gene_justification) for a multi-gene result,
+  // same as the single-gene path, just with this also set.
+  additionalGenes?: string[]
+  // weights_used from the API response — passed through so the per-card
+  // Fit Score hover tooltip (Item 2) can show the REAL weights for this
+  // query, not generic/static text. Flat dict for single-gene, {gene:
+  // {...weights}} for multi-gene (same shape describeWeights expects).
+  weightsUsed?: any
   onCellLineClick: (cvcl: string) => void
 }
 
@@ -18,6 +34,28 @@ const SECTION_LABELS = [
 
 const MONO_SECTIONS = new Set(['DATA SOURCES', 'LITERATURE CITATIONS', 'LITERATURE', 'DATA CITATIONS'])
 
+// LLM output (Groq/gpt-oss-20b, observed directly) uses Unicode dash/hyphen
+// lookalikes inconsistently and non-deterministically — e.g. "TRADE‑OFFS"
+// with U+2011 NON-BREAKING HYPHEN instead of a plain ASCII "-" — which used
+// to make parseJustification's exact .includes() match silently fail and
+// swallow that section's content into whichever section matched last (see
+// the multi-gene AI-justification investigation: reproduced directly by
+// running this exact function against a real captured response). Not
+// unique to multi-gene — a single-gene response can hit the same thing by
+// chance depending on what that particular LLM call happened to generate.
+// Normalizing BOTH the scanned text and SECTION_LABELS before matching
+// (SECTION_LABELS is already plain ASCII today, so normalizing it is a
+// no-op in practice, but doing it keeps the comparison correct even if a
+// label ever changes) closes this off structurally rather than patching
+// one specific character that happened to be observed.
+// U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN, U+2012 FIGURE DASH,
+// U+2013 EN DASH, U+2014 EM DASH — a contiguous Unicode range, written as
+// escapes (not literal glyphs) so it's unambiguous to read and immune to
+// any editor/encoding mangling of near-identical-looking characters.
+const DASH_VARIANTS = /[‐-—]/g
+const normalizeDashes = (s: string): string => s.replace(DASH_VARIANTS, '-')
+const NORMALIZED_SECTION_LABELS = SECTION_LABELS.map(normalizeDashes)
+
 function parseJustification(text: string): Record<string, string> {
   const sections: Record<string, string> = {}
   const lines = text.split('\n')
@@ -28,7 +66,12 @@ function parseJustification(text: string): Record<string, string> {
     const trimmed = line.trim()
     if (!trimmed) continue
 
-    const matchedLabel = SECTION_LABELS.find(lbl => trimmed.toUpperCase().includes(lbl))
+    const normalizedLine = normalizeDashes(trimmed.toUpperCase())
+    const matchIdx = NORMALIZED_SECTION_LABELS.findIndex(lbl => normalizedLine.includes(lbl))
+    // Original (non-normalized) label is still what gets stored/looked up
+    // as the section key elsewhere (SECTION_LABELS.filter(...), parsed[k],
+    // etc.) — only the MATCHING comparison is dash-tolerant, not the key.
+    const matchedLabel = matchIdx >= 0 ? SECTION_LABELS[matchIdx] : undefined
 
     if (matchedLabel) {
       if (currentLabel) sections[currentLabel] = currentContent.join(' ').trim()
@@ -44,149 +87,196 @@ function parseJustification(text: string): Record<string, string> {
   return sections
 }
 
-function levelColor(level: string) {
-  if (level === 'High' || level === 'Confirms') return 'text-green-700 font-semibold'
-  if (level === 'Medium') return 'text-amber-600 font-semibold'
-  if (level === 'Low' || level === 'Contradicts') return 'text-red-600 font-semibold'
-  return 'text-gray-400'
-}
-
-const CLASS_STYLE: Record<string, string> = {
-  tissue_specific:  'bg-[#E8F5E9] text-[#2D6A4F]',
-  ubiquitous:       'bg-[#FFF8E1] text-[#F57F17]',
-  loss_of_function: 'bg-[#FCE4EC] text-[#C62828]',
+// Three-state palette (see Part 4 of the design spec) reused for evidence
+// level labels (High/Medium/Low/Confirms/Contradicts), not just metric bars.
+function levelColor(level: string): string {
+  if (level === 'High' || level === 'Confirms') return 'var(--accent)'
+  if (level === 'Medium') return 'var(--accent-amber)'
+  if (level === 'Low' || level === 'Contradicts') return 'var(--muted-state)'
+  return 'var(--muted-state)'
 }
 
 function Section({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="border-t border-[#F5F5F7] mt-3 pt-3">
+    <div className="border-t border-cso-border mt-3 pt-3">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 text-xs text-[#6E6E73] hover:text-[#1D1D1F] transition-colors"
+        className="flex items-center gap-1.5 text-xs text-cso-body hover:text-cso-heading transition-colors"
       >
         <span>{open ? '▾' : '▸'}</span>
         {label}
-        {count !== undefined && <span className="text-[#D2D2D7] font-mono">({count})</span>}
+        {count !== undefined && <span className="text-cso-muted font-mono">({count})</span>}
       </button>
       {open && <div className="mt-2">{children}</div>}
     </div>
   )
 }
 
-export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, onCellLineClick }: Props) {
-  const [aiData, setAiData] = useState<any>(null)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiError, setAiError] = useState(false)
+export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, additionalGenes, weightsUsed, onCellLineClick }: Props) {
+  // Item 3: AI-justification state (per cell line) now lives in
+  // SearchContext, keyed by cellosaurus_id, instead of local state here —
+  // so clicking "Get AI Justification" (which can take well over a
+  // minute for the agentic path) and navigating away no longer orphans
+  // the result; it lands in state that outlives this component.
+  const { agenticByCellLine, runAgenticJustification } = useSearch()
+  const ai = agenticByCellLine[result.cellosaurus_id]
+  const aiData = ai?.data ?? null
+  const aiLoading = ai?.loading ?? false
+  const aiError = ai?.error ?? false
 
-  const isTop    = result.rank === 1
-  const scorePct = Math.round((result.final_score ?? 0) * 100)
+  const isTop = result.rank === 1
+  // Multi-gene combined-search results (see multi_gene_ranker.rank_multi_gene
+  // / api/main.py's _build_multi_gene_result) use combined_score in place of
+  // final_score, and omit essentially every other single-gene evidence
+  // field (rna_score, hpa_evidence, pathway_activity_score, ...) — detected
+  // here via per_gene_percentiles' presence, the one field unique to that
+  // shape, so the sections below that don't apply to it stay hidden rather
+  // than rendering misleading zeros. Shared with the GRID/COMPACT layouts
+  // via utils/resultFields so this logic can't drift between variants.
+  const isMultiGene = isMultiGeneResult(result)
+  const scorePct = getScorePct(result)
+  const hasContextFilter = computeHasContextFilter(diseaseFilter)
+  const sources = getSources(result)
 
-  const sources = [
-    (result.hpa_score ?? 0) > 0 && 'HPA RNA',
-    (result.depmap_score ?? 0) > 0 && 'DepMap',
-    (result.geo_confirmation ?? 0) !== 0 && 'GEO',
-    (result.protein_score ?? 0) > 0 && 'Proteomics',
-  ].filter(Boolean) as string[]
-
-  const handleAI = async () => {
-    setAiLoading(true)
-    setAiError(false)
-    try {
-      const data = await api.recommendAgentic({
-        gene,
-        disease_filter: diseaseFilter,
-        exclude_genes: excludeGenes,
-        target_cellosaurus_id: result.cellosaurus_id,
-        top_n: 1,
-      })
-      setAiData(data)
-    } catch {
-      setAiError(true)
-    } finally {
-      setAiLoading(false)
-    }
+  const handleAI = () => {
+    runAgenticJustification({
+      gene,
+      additionalGenes,
+      diseaseFilter,
+      excludeGenes,
+      targetCellosaurusId: result.cellosaurus_id,
+    })
   }
 
-  const classStyle = CLASS_STYLE[result.gene_class] ?? 'bg-[#F5F5F7] text-[#6E6E73]'
-
   return (
-    <div
-      className={`bg-white border border-[#D2D2D7] rounded-xl p-5 transition-shadow duration-200 hover:shadow-md ${
-        isTop ? 'border-l-4 border-l-[#1D1D1F]' : ''
-      }`}
-      style={{ boxShadow: '0 1px 8px rgba(0,0,0,0.06)' }}
-    >
-      {/* Top row */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-start gap-3 flex-1 min-w-0">
-          <span className="text-[#6E6E73] font-mono text-xl font-bold leading-none flex-shrink-0 mt-0.5">
+    <div className="result-card-wrap bg-cso-card border border-cso-border rounded p-5">
+      {/* Top row — rank, name, CVCL id, fit ring. Part 6: the rank numeral
+          and cell line name carry real visual weight, and the ring (sized
+          up further, see FitRing's own default) is the clear focal point
+          rather than one element among several equally-weighted ones.
+          Part 5: only rank 1 keeps the ring's accent fill — see FitRing's
+          `dim` prop and index.css's hover/focus restore rule; this is the
+          reference's hard-binary "top result" signal, not the old
+          decorative left-border stripe (removed — redundant with this). */}
+      <div className="flex items-start justify-between mb-4 gap-5">
+        <div className="flex items-start gap-4 flex-1 min-w-0">
+          <span
+            className="font-mono leading-none flex-shrink-0"
+            style={{ fontSize: '2.75rem', fontWeight: 300, color: 'var(--text-body)', opacity: 0.6 }}
+          >
             {String(result.rank).padStart(2, '0')}
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 pt-1.5">
             <button
               onClick={() => onCellLineClick(result.cellosaurus_id)}
-              className="text-[#1D1D1F] font-bold text-base leading-tight hover:text-[#6E6E73] transition-colors text-left truncate max-w-xs block"
+              className="hover:underline transition-colors text-left truncate max-w-xs block"
+              style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1.375rem', lineHeight: 1.15 }}
             >
               {result.official_name}
             </button>
-            <div className="text-[#6E6E73] font-mono text-xs mt-0.5">{result.cellosaurus_id}</div>
+            <div className="text-cso-body font-mono text-xs mt-1">{result.cellosaurus_id}</div>
           </div>
         </div>
-        <div className="text-right ml-4 flex-shrink-0">
-          <div className="text-[#1D1D1F] font-mono text-2xl font-bold leading-tight">{scorePct}%</div>
-          <div className="text-[#6E6E73] text-xs">Fit Score</div>
-        </div>
+        {/* Item 2: the Fit Score weight breakdown is now a hover/focus
+            popover anchored right here, not a permanent panel above the
+            results list — real per-query weights via weightsUsed, not
+            static text. */}
+        <HoverPopover
+          content={
+            <FitScoreExplanation
+              genes={[gene, ...(additionalGenes ?? [])]}
+              weightsUsed={weightsUsed}
+              isMultiGene={isMultiGene}
+              geneClass={result.gene_class}
+            />
+          }
+        >
+          <FitRing score={scorePct} label={isMultiGene ? 'COMBINED' : 'FIT SCORE'} size={96} dim={!isTop} />
+        </HoverPopover>
       </div>
 
-      {/* Badges */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-3">
-        {result.gene_class && (
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${classStyle}`}>
-            {(result.gene_class as string).replace(/_/g, ' ')}
-          </span>
-        )}
-        {result.gene_role && (
-          <span className="text-xs text-[#6E6E73] italic">
-            {result.gene_role}
-          </span>
-        )}
-        {[
-          { label: 'RNA',     val: result.rna_score },
-          { label: 'PROTEIN', val: result.protein_score },
-          { label: 'QUALITY', val: result.quality_score },
-          { label: 'CONTEXT', val: result.context_score },
-          { label: 'PATHWAY', val: result.pathway_activity_score },
-        ].map(({ label, val }) => (
-          <span key={label} className="bg-[#F5F5F7] text-[#6E6E73] text-xs px-2 py-0.5 rounded font-mono">
-            {(val ?? 0).toFixed(2)} {label}
-          </span>
-        ))}
-      </div>
+      {/* Per-gene percentile breakdown — multi-gene only. The transparency
+          mechanism for a combined search, in place of GENE CLASS/GENE ROLE
+          and the EVIDENCE metrics below (which don't apply — those fields
+          don't exist on a multi-gene result). */}
+      {isMultiGene && (
+        <div className="text-xs text-cso-body font-mono mb-3">
+          {Object.entries(result.per_gene_percentiles as Record<string, number>)
+            .map(([g, pct]) => `${g}: ${Math.round(pct * 100)}%ile`)
+            .join(', ')}
+        </div>
+      )}
+
+      {/* GENE CLASS / GENE ROLE — explicit labelled rows (Part 1, PROBLEM A).
+          Single-gene only; both fields are naturally absent on a multi-gene
+          result. */}
+      {!isMultiGene && (result.gene_class || result.gene_role) && (
+        <div className="mb-3">
+          {result.gene_class && (
+            <LabelValueRow
+              label="Gene class"
+              value={(result.gene_class as string).replace(/_/g, '-')}
+              explanation="Determines which evidence types are weighted most heavily for this gene."
+            />
+          )}
+          {result.gene_role && (
+            <LabelValueRow
+              label="Gene role"
+              value={result.gene_role}
+              explanation="The gene's biological function, for context."
+            />
+          )}
+        </div>
+      )}
+
+      {/* EVIDENCE — labelled metric rows with icon, hover explanation, bar,
+          and value (Part 1 PROBLEM B, Part 4). Single-gene only. */}
+      {!isMultiGene && (
+        <div className="mb-3">
+          <div className="text-[11px] uppercase tracking-[0.08em] text-cso-body mb-1.5">Evidence</div>
+          <MetricRow metric="rna"     value={result.rna_score ?? 0} />
+          <MetricRow metric="protein" value={result.protein_score ?? 0} />
+          <MetricRow metric="quality" value={result.quality_score ?? 0} />
+          <MetricRow
+            metric="context"
+            value={hasContextFilter ? (result.context_score ?? 0) : null}
+            tooltip={hasContextFilter ? undefined : 'No disease or tissue filter was applied to this search'}
+          />
+          <MetricRow metric="pathway" value={result.pathway_activity_score ?? 0} />
+          <MetricRow metric="rwr"     value={result.rwr_score ?? 0} />
+        </div>
+      )}
 
       {/* Source chips */}
       {sources.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {sources.map(s => (
-            <span key={s} className="text-xs border border-[#D2D2D7] text-[#6E6E73] px-2 py-0.5 rounded-full">
+            <span key={s} className="text-xs border border-cso-border text-cso-body px-2 py-0.5 rounded-full">
               {s}
             </span>
           ))}
         </div>
       )}
 
-      {/* Evidence line */}
-      <div className="text-[#6E6E73] text-xs mb-2">
-        {[result.disease, result.lineage, result.n_sources ? `${result.n_sources} RNA src` : null]
-          .filter(Boolean)
-          .join(' · ')}
-      </div>
+      {/* Disease/tissue match + source count — deliberately labelled
+          "DISEASE / TISSUE" rather than reusing "CONTEXT" (which the
+          EVIDENCE section above already uses for the context SCORE) to
+          avoid recreating the exact kind of label collision Part 1 exists
+          to fix. */}
+      {(result.disease || result.lineage || result.n_sources) && (
+        <div className="text-cso-body text-xs mb-2">
+          {[result.disease, result.lineage, result.n_sources ? `${result.n_sources} RNA src` : null]
+            .filter(Boolean)
+            .join(', ')}
+        </div>
+      )}
 
       {/* Doubling time */}
       {result.growth_properties?.doubling_time && (
-        <div className="text-xs text-[#6E6E73] mt-1">
-          Doubling time: {result.growth_properties.doubling_time.min}
-          –{result.growth_properties.doubling_time.max}{' '}
+        <div className="text-xs text-cso-body mt-1">
+          Doubling time: {result.growth_properties.doubling_time.min} to{' '}
+          {result.growth_properties.doubling_time.max}{' '}
           {result.growth_properties.doubling_time.unit}s
         </div>
       )}
@@ -195,7 +285,7 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
       {result.exclusion_warnings?.length > 0 && (
         <div className="mb-2 space-y-0.5">
           {result.exclusion_warnings.map((w: any, i: number) => (
-            <div key={i} className="text-[#F57F17] text-xs">⚠ {w.message}</div>
+            <div key={i} className="text-cso-amber text-xs">{w.message}</div>
           ))}
         </div>
       )}
@@ -205,18 +295,18 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         <Section label="Similar alternatives" count={result.alternatives.length}>
           <div className="space-y-2">
             {result.alternatives.map((alt: any, i: number) => (
-              <div key={i} className="bg-[#F5F5F7] rounded-lg p-3 text-xs">
+              <div key={i} className="bg-cso-bg rounded p-3 text-xs">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[#1D1D1F] font-medium">{alt.official_name}</span>
-                  <span className="text-[#1D1D1F] font-mono">{Math.round((alt.similarity_score ?? 0) * 100)}%</span>
+                  <span className="text-cso-heading font-medium">{alt.official_name}</span>
+                  <span className="text-cso-heading font-mono">{Math.round((alt.similarity_score ?? 0) * 100)}%</span>
                 </div>
-                <div className="text-[#6E6E73] mb-1 font-mono">{alt.cellosaurus_id}</div>
-                <div className="text-[#6E6E73] italic leading-relaxed">{alt.similarity_reason}</div>
-                {alt.note && <div className="text-[#6E6E73] mt-1">{alt.note}</div>}
+                <div className="text-cso-body mb-1 font-mono">{alt.cellosaurus_id}</div>
+                <div className="text-cso-body italic leading-relaxed">{alt.similarity_reason}</div>
+                {alt.note && <div className="text-cso-body mt-1">{alt.note}</div>}
                 <a
                   href={alt.cellosaurus_url ?? `https://www.cellosaurus.org/${alt.cellosaurus_id}`}
                   target="_blank" rel="noopener noreferrer"
-                  className="text-[#457B9D] hover:underline mt-1 inline-block"
+                  className="text-cso-heading hover:underline mt-1 inline-block"
                 >
                   Cellosaurus ↗
                 </a>
@@ -226,44 +316,26 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         </Section>
       )}
 
-      {/* Score breakdown — all detailed evidence consolidated here (bars +
-          quality/context reasoning + per-source percentiles + rank
-          comparison) so the collapsed card stays scannable across 10+
-          results, and depth is only a click away. */}
+      {/* Score breakdown — supplementary detail not already covered by the
+          EVIDENCE rows above: the plain-English reasoning behind quality/
+          context/pathway, per-source agreement levels, and the ranking
+          comparison to the next cell line. Single-gene only. */}
+      {!isMultiGene && (
       <Section label="Score breakdown">
-        <div className="space-y-2">
-          <ScoreBar label="RNA"     value={result.rna_score     ?? 0} />
-          <ScoreBar label="Protein" value={result.protein_score ?? 0} />
-          <div>
-            <ScoreBar label="Quality" value={result.quality_score ?? 0} />
-            {result.quality_explanation && (
-              <div className="text-xs text-gray-400 pl-3 mt-0.5">
-                └─ {result.quality_explanation}
-              </div>
-            )}
-          </div>
-          <div>
-            <ScoreBar label="Context" value={result.context_score ?? 0} />
-            {result.context_explanation && (
-              <div className="text-xs text-gray-400 pl-3 mt-0.5">
-                └─ {result.context_explanation}
-              </div>
-            )}
-          </div>
-          <div>
-            <ScoreBar label="Pathway" value={result.pathway_activity_score ?? 0} />
-            {result.pathway_genes_total > 0 && (
-              <div className="text-xs text-gray-400 pl-3 mt-0.5">
-                └─ {result.pathway_genes_expressed}/{result.pathway_genes_total} pathway-neighbor genes also expressed here
-              </div>
-            )}
-          </div>
+        <div className="space-y-1.5 text-xs text-cso-body">
+          {result.quality_explanation && <div>Quality: {result.quality_explanation}</div>}
+          {result.context_explanation && <div>Context: {result.context_explanation}</div>}
+          {result.pathway_genes_total > 0 && (
+            <div>
+              Pathway: {result.pathway_genes_expressed}/{result.pathway_genes_total} pathway-neighbour genes also expressed here
+            </div>
+          )}
         </div>
 
         {/* Per-source evidence — label + exact percentile, so cross-source
             agreement/disagreement is visible without losing precision to a
             coarse Low/Medium/High bucket. */}
-        <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-[#F5F5F7]">
+        <div className="grid grid-cols-4 gap-3 mt-3 pt-3 border-t border-cso-border">
           {[
             { key: 'hpa_evidence', name: 'HPA RNA' },
             { key: 'depmap_evidence', name: 'DepMap' },
@@ -274,12 +346,12 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
             if (!ev) return null
             return (
               <div key={key} className="text-xs">
-                <div className="text-[#6E6E73]">{name}</div>
-                <div className={levelColor(ev.label)}>
+                <div className="text-cso-body">{name}</div>
+                <div className="font-semibold" style={{ color: levelColor(ev.label) }}>
                   {ev.label}
                 </div>
                 {ev.percentile && (
-                  <div className="text-[10px] text-gray-400">
+                  <div className="text-[10px] text-cso-muted">
                     {ev.percentile}
                   </div>
                 )}
@@ -289,23 +361,28 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
         </div>
 
         {result.vs_next_rank && (
-          <div className="mt-3 pt-3 border-t border-[#F5F5F7] text-xs text-[#6E6E73] italic">
+          <div className="mt-3 pt-3 border-t border-cso-border text-xs text-cso-body italic">
             {result.vs_next_rank}
           </div>
         )}
       </Section>
+      )}
 
-      {/* AI Justification */}
-      <div className="border-t border-[#F5F5F7] mt-3 pt-3">
+      {/* AI Justification — available for both single- and multi-gene
+          results. For multi-gene, handleAI() passes additionalGenes
+          through to /recommend/agentic, which produces ONE joint
+          justification addressing all queried genes together (see
+          generate_multi_gene_justification) — not per-gene separately. */}
+      <div className="border-t border-cso-border mt-3 pt-3">
         {!aiData ? (
           <button
             onClick={handleAI}
             disabled={aiLoading}
-            className="flex items-center gap-2 text-xs border border-[#D2D2D7] text-[#6E6E73] px-3 py-1.5 rounded-lg hover:border-[#1D1D1F] hover:text-[#1D1D1F] transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 text-xs border border-cso-border text-cso-body px-3 py-1.5 rounded hover:border-cso-heading hover:text-cso-heading transition-colors disabled:opacity-50"
           >
             {aiLoading ? (
               <>
-                <span className="w-3 h-3 border border-[#D2D2D7] border-t-[#1D1D1F] rounded-full animate-spin" />
+                <span className="w-3 h-3 border border-cso-border border-t-cso-heading rounded-full animate-spin" />
                 Generating AI justification…
               </>
             ) : (
@@ -324,36 +401,36 @@ export default function ResultCard({ result, gene, diseaseFilter, excludeGenes, 
               const hasAny   = mainKeys.length > 0 || monoKeys.length > 0
 
               return hasAny ? (
-                <div className="bg-[#F5F5F7] rounded-lg p-3 space-y-2.5">
+                <div className="bg-cso-bg rounded p-3 space-y-2.5">
                   {mainKeys.map(k => (
                     <div key={k}>
-                      <div className="text-[10px] font-semibold tracking-wider text-[#6E6E73] uppercase mb-0.5">{k}</div>
-                      <p className="text-xs text-[#1D1D1F] leading-relaxed">{parsed[k]}</p>
+                      <div className="text-[10px] font-semibold tracking-wider text-cso-body uppercase mb-0.5">{k}</div>
+                      <p className="text-xs text-cso-heading leading-relaxed">{renderBold(parsed[k])}</p>
                     </div>
                   ))}
                   {monoKeys.map(k => (
-                    <div key={k} className="border-t border-[#D2D2D7] pt-2">
-                      <div className="text-[10px] font-semibold tracking-wider text-[#6E6E73] uppercase mb-0.5">{k}</div>
-                      <pre className="text-[10px] text-[#6E6E73] font-mono whitespace-pre-wrap leading-relaxed">{parsed[k]}</pre>
+                    <div key={k} className="border-t border-cso-border pt-2">
+                      <div className="text-[10px] font-semibold tracking-wider text-cso-body uppercase mb-0.5">{k}</div>
+                      <pre className="text-[10px] text-cso-body font-mono whitespace-pre-wrap leading-relaxed">{parsed[k]}</pre>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="bg-[#F5F5F7] rounded-lg p-3 text-xs text-[#1D1D1F] leading-relaxed">{raw}</div>
+                <div className="bg-cso-bg rounded p-3 text-xs text-cso-heading leading-relaxed">{renderBold(raw)}</div>
               )
             })()}
             {aiData.dataset_citations && (
               <div className="space-y-0.5">
                 {aiData.dataset_citations.map((c: any) => (
-                  <div key={c.key} className="text-[#6E6E73] text-xs font-mono">[{c.key}] {c.name}</div>
+                  <div key={c.key} className="text-cso-body text-xs font-mono">[{c.key}] {c.name}</div>
                 ))}
               </div>
             )}
           </div>
         )}
         {aiError && (
-          <div className="text-[#C62828] text-xs mt-1">
-            AI justification failed — check that the Ollama server is running.
+          <div className="text-cso-amber text-xs mt-1">
+            AI justification failed, check that the Ollama server is running.
           </div>
         )}
       </div>
