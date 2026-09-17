@@ -1,114 +1,82 @@
-import { useEffect, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import ThemeToggle from './ThemeToggle'
+import ViewModeToggle from './ViewModeToggle'
+import type { ViewMode } from '../utils/viewMode'
 
-const PILL_STYLE: React.CSSProperties = {
-  display: 'flex',
-  gap: 8,
-  padding: '10px 28px',
-  borderRadius: 50,
-  background: 'rgba(255,255,255,0.85)',
-  backdropFilter: 'blur(20px) saturate(180%)',
-  WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-  border: '1px solid rgba(0,0,0,0.10)',
-  boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)',
+const NAV_LINKS = [
+  { to: '/',       label: 'Home',   end: true  },
+  { to: '/about',  label: 'About',  end: false },
+  { to: '/search', label: 'Search', end: false },
+  { to: '/data',   label: 'Data',   end: false },
+]
+
+interface Props {
+  viewMode: ViewMode
+  onViewModeChange: (m: ViewMode) => void
 }
 
-const LINK_BASE: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 500,
-  color: '#1D1D1F',
-  textDecoration: 'none',
-  borderRadius: 20,
-  padding: '4px 12px',
-  transition: 'background 0.2s',
-}
-
-export default function Navbar() {
-  const [scrolled, setScrolled] = useState(false)
+// Corrected direction (see the task that replaced the original hero/nav
+// pass): a thin, dense, three-zone chrome bar — LEFT wordmark + adjacent
+// tag, CENTRE the view-mode control (only meaningful, so only rendered,
+// on /search), RIGHT nav links with a small solid triangle marking the
+// active one, plus the theme toggle. No filled accent button anywhere
+// here (Part 3) — "Search" is just one of the four equal nav links now,
+// not a separate CTA.
+export default function Navbar({ viewMode, onViewModeChange }: Props) {
   const navigate = useNavigate()
-
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20)
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  }, [])
+  const location = useLocation()
+  const onSearchPage = location.pathname === '/search'
 
   return (
     <nav
-      style={{
-        position: 'fixed',
-        top: 0, left: 0, right: 0,
-        zIndex: 50,
-        transition: 'background 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease',
-        background: scrolled ? 'rgba(255,255,255,0.85)' : 'transparent',
-        backdropFilter: scrolled ? 'blur(20px)' : 'none',
-        WebkitBackdropFilter: scrolled ? 'blur(20px)' : 'none',
-        borderBottom: scrolled ? '1px solid rgba(0,0,0,0.06)' : '1px solid transparent',
-      }}
+      className="sticky top-0 z-50 bg-cso-bg"
+      style={{ borderBottom: '1px solid var(--border)' }}
     >
-      <div style={{
-        maxWidth: 1280, margin: '0 auto',
-        padding: '16px 32px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      }}>
-        {/* Left — logo, outside pill */}
-        <span
+      <div className="max-w-7xl mx-auto px-6 py-2.5 flex items-center justify-between gap-6">
+        {/* Left — wordmark + adjacent tag */}
+        <button
           onClick={() => navigate('/')}
-          style={{
-            fontWeight: 600, color: '#1D1D1F', fontSize: 15, letterSpacing: '-0.01em',
-            cursor: 'pointer', userSelect: 'none', border: 'none', outline: 'none',
-            background: 'none', textDecoration: 'none',
-          }}
+          className="flex items-baseline gap-1.5 flex-shrink-0"
+          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
         >
-          CellSelector Omics
-        </span>
+          <span className="font-sans font-semibold text-cso-heading text-[14px] tracking-tight">
+            CellSelector
+          </span>
+          <span
+            className="font-mono text-cso-body"
+            style={{ fontSize: 9, letterSpacing: '0.1em', verticalAlign: 'super' }}
+          >
+            OMICS / v1.0
+          </span>
+        </button>
 
-        {/* Centre — glass pill with Home + About only */}
-        <div style={PILL_STYLE}>
-          {[
-            { to: '/',       label: 'Home',   end: true  },
-            { to: '/about',  label: 'About',  end: false },
-          ].map(({ to, label, end }) => (
+        {/* Centre — LIST/GRID/COMPACT, only meaningful on /search */}
+        <div className="flex-1 flex justify-center">
+          {onSearchPage && <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />}
+        </div>
+
+        {/* Right — nav links (active marked with a triangle to its left,
+            dim/bright contrast only, no weight change), theme toggle */}
+        <div className="flex items-center gap-5 flex-shrink-0">
+          {NAV_LINKS.map(({ to, label, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
-              style={({ isActive }) => ({
-                ...LINK_BASE,
-                fontWeight: isActive ? 600 : 500,
-                background: 'transparent',
-                textDecoration: 'none',
-                transition: 'color 0.2s ease',
-              })}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#888888' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#1D1D1F' }}
+              className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] transition-colors"
             >
-              {label}
+              {({ isActive }) => (
+                <>
+                  <svg width="5" height="7" viewBox="0 0 5 7" aria-hidden="true" style={{ visibility: isActive ? 'visible' : 'hidden' }}>
+                    <path d="M5 3.5L0 7V0z" fill="var(--accent)" />
+                  </svg>
+                  <span style={{ color: isActive ? 'var(--text-heading)' : 'var(--text-body)' }}>{label}</span>
+                </>
+              )}
             </NavLink>
           ))}
+          <ThemeToggle />
         </div>
-
-        {/* Right — circle arrow button */}
-        <button
-          onClick={() => navigate('/search')}
-          aria-label="Open search tool"
-          style={{
-            width: 40, height: 40,
-            borderRadius: '50%',
-            background: '#1D1D1F',
-            color: 'white',
-            border: 'none',
-            cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 18,
-            flexShrink: 0,
-            transition: 'background 0.2s',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = '#333333')}
-          onMouseLeave={e => (e.currentTarget.style.background = '#1D1D1F')}
-        >
-          →
-        </button>
       </div>
     </nav>
   )
