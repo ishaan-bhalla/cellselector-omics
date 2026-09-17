@@ -176,6 +176,74 @@ more prominent. Then add any other genuine limitations.)
     return _chat(prompt)
 
 
+def generate_multi_gene_justification(
+    genes: list[str],
+    evidence_context_by_gene: dict[str, str],
+    cell_line_name: str,
+) -> str:
+    """
+    Multi-gene analog of generate_justification(): ONE combined prompt
+    asking the LLM to justify a cell line's suitability for a COMBINED
+    query across ALL genes jointly (e.g. co-targeting, a double-mutant
+    model, combination therapy) — not N separate single-gene answers
+    concatenated. Reuses the SAME _chat() LLM-call mechanism (backend
+    routing via _USE_GROQ, SYSTEM_PROMPT) generate_justification() uses;
+    only the prompt template differs.
+
+    evidence_context_by_gene: {gene: format_context(gene, evidence)
+    output} — the SAME per-gene context string generate_justification()
+    already uses for a single gene, one per queried gene, each still
+    ending in its own single-gene TRADE-OFFS instructions (format_context
+    is reused completely unmodified). The prompt below explicitly tells
+    the model those per-gene instructions all still apply, individually,
+    rather than relying on it to figure that out from concatenated text.
+    """
+    if len(genes) == 2:
+        genes_str = f"{genes[0]} and {genes[1]}"
+    else:
+        genes_str = ", ".join(genes[:-1]) + f", and {genes[-1]}"
+
+    evidence_block = "\n\n".join(
+        f"{'=' * 20} EVIDENCE FOR {gene} {'=' * 20}\n{evidence_context_by_gene[gene]}"
+        for gene in genes
+    )
+
+    prompt = f"""Based on this evidence, justify whether {cell_line_name} is a \
+good choice for a COMBINED study of {genes_str} together (e.g. co-targeting, \
+a double-mutant model, or a combination-therapy context) — address the \
+targets JOINTLY, not as separate unrelated single-gene questions.
+
+{evidence_block}
+
+IMPORTANT: the evidence above is organized in separate sections, one per \
+gene, each ending with that gene's own instructions about its MISSING \
+SOURCES and MUTATION STATUS. Your answer must address ALL {len(genes)} \
+genes — do not focus on one and ignore the rest, and do not silently drop \
+either gene's mutation status or missing-sources statement.
+
+Provide your answer in exactly this format:
+1. RECOMMENDATION: (Strongly Recommended / Recommended / Use with Caution / Not Recommended)
+2. KEY REASON: (one sentence — the single most important factor for the COMBINED query)
+3. EVIDENCE SUMMARY: (2-3 sentences covering the expression data for EACH gene)
+4. TRADE-OFFS: (concerns and limitations, in prose. For EACH gene, separately: \
+name the data sources from THAT gene's "MISSING SOURCES" line — those exact \
+source names and only those, written into a normal sentence (do NOT copy the \
+bracketed [MISSING]/[PRESENT] list); if that gene's line says "none", say all \
+five sources have data for that gene. Also state THAT gene's mutation status \
+exactly as given in its own MUTATION STATUS block — whether a damaging \
+variant was found and cited, whether the gene is confirmed wild-type \
+(variant calls exist, none damaging), or whether mutation status is unknown \
+(no variant calls exist for this cell line). Do not omit either gene's \
+statement even when other trade-offs are more prominent. Then add any other \
+genuine limitations, INCLUDING whether the combination itself is \
+biologically coherent — do these genes act in the same pathway, opposing \
+pathways, or are they unrelated? Is co-targeting them a sensible \
+experimental design at all?)
+5. BEST FOR: (what combined experiment type suits this cell line best)"""
+
+    return _chat(prompt)
+
+
 def add_citations_to_justification(
     justification_text: str,
     dataset_citations: list[dict],
@@ -235,4 +303,3 @@ def generate_comparison(
     )
 
     return _chat(summary_prompt)
-
