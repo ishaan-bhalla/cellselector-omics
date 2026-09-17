@@ -1,218 +1,234 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { useEffect } from 'react'
 import { api } from '../api/client'
 import DNAHelix from '../components/DNAHelix'
+import Reveal from '../components/Reveal'
 
-const LOREM_BODY = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
+// Underline-reveal CTA — a thin bar that grows from 0 to full width under
+// the text on hover (transform: scaleX, transform-origin left), in place
+// of a filled pill button. Local hover state rather than a global CSS
+// rule, so this stays self-contained.
+function UnderlineCTA({ to, children }: { to: string; children: React.ReactNode }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <Link
+      to={to}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: 'relative', color: 'var(--text-heading)',
+        fontSize: 18, fontWeight: 600, textDecoration: 'none',
+        paddingBottom: 6, display: 'inline-block',
+      }}
+    >
+      {children}
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, height: 2,
+          background: 'var(--text-heading)', transform: hovered ? 'scaleX(1)' : 'scaleX(0)',
+          transformOrigin: 'left', transition: 'transform 280ms ease',
+        }}
+      />
+    </Link>
+  )
+}
 
-const PILLARS = [
-  { title: 'Lorem Ipsum',        body: LOREM_BODY },
-  { title: 'Dolor Sit',          body: LOREM_BODY },
-  { title: 'Amet Consectetur',   body: LOREM_BODY },
+// Real, verifiable capabilities — kept from the Phase 1 copy, restyled
+// below as a flowing list (no bordered 3-card row, no numbered-circle step
+// tracker — see Part 1's explicit redesign instruction).
+const CAPABILITIES = [
+  {
+    n: '01',
+    title: 'Multi-omics integration',
+    body: 'RNA expression from HPA and DepMap, protein abundance from CCLE proteomics, and CRISPR dependency from DepMap, combined into one evidence-backed score.',
+  },
+  {
+    n: '02',
+    title: 'Gene-class-adaptive scoring',
+    body: 'Weights are learned separately for tissue-specific, ubiquitous, and loss-of-function genes, since each is suited by a different mix of evidence.',
+  },
+  {
+    n: '03',
+    title: 'Knowledge-graph network centrality',
+    body: 'A random-walk-with-restart signal over a graph of genes, cell lines, and pathways captures network proximity that direct expression data alone misses.',
+  },
+  {
+    n: '04',
+    title: 'Agentic justifications with citations',
+    body: 'An optional AI-generated rationale explains a recommendation in plain language and cites the specific datasets behind it, so it can be checked, not just trusted.',
+  },
 ]
 
 const STEPS = [
-  { n: '01', title: 'Lorem ipsum dolor sit amet' },
-  { n: '02', title: 'Consectetur adipiscing elit' },
-  { n: '03', title: 'Sed do eiusmod tempor' },
-  { n: '04', title: 'Incididunt ut labore' },
-]
-
-const SOURCES = [
-  { key: 'D1', name: 'Lorem Ipsum' },
-  { key: 'D2', name: 'Lorem Ipsum' },
-  { key: 'D3', name: 'Lorem Ipsum' },
-  { key: 'D4', name: 'Lorem Ipsum' },
-  { key: 'D5', name: 'Lorem Ipsum' },
+  { n: '01', title: 'Enter a gene symbol', body: 'e.g. EGFR, BRCA1, KIT' },
+  { n: '02', title: 'Set optional filters', body: 'disease, tissue, or genes to exclude' },
+  { n: '03', title: 'Review ranked cell lines', body: 'with a full evidence breakdown per candidate' },
+  { n: '04', title: 'Get an AI justification', body: 'a cited, plain-language rationale for the top pick' },
 ]
 
 export default function Home() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [health, setHealth] = useState<any>(null)
-  const [stats, setStats]   = useState<any>(null)
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
-    api.stats().then(setStats).catch(() => {})
   }, [])
 
   const statItems = [
-    { value: health?.cell_lines ? health.cell_lines.toLocaleString() : '2,076', label: 'LOREM' },
-    { value: String(health?.datasets ?? 4),                                      label: 'IPSUM' },
-    { value: '222M',                                                              label: 'DOLOR' },
-    { value: stats?.validation?.hit_at_10 != null ? `${Math.round(stats.validation.hit_at_10 * 100)}%` : '4/5', label: 'SIT' },
+    { value: health?.cell_lines ? health.cell_lines.toLocaleString() : '2,076', label: 'Cell lines' },
+    { value: '5',  label: 'Data sources' },
+    { value: '44', label: 'Validated genes' },
+    { value: '3',  label: 'Gene classes' },
   ]
 
   return (
-    <div className="bg-white">
+    <div className="bg-cso-bg">
 
-      {/* ── Hero ── */}
-      <section style={{ position: 'relative', height: '100vh', overflow: 'hidden', background: 'white' }}>
-
-        {/* Zone 1 — DNA helix, left 55% */}
-        <div
-          style={{ position: 'absolute', left: 0, top: 0, width: '55%', height: '100%', overflow: 'hidden' }}
-          onMouseMove={e => {
-            const r = e.currentTarget.getBoundingClientRect()
-            setMousePos({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
-          }}
-          onMouseLeave={() => setMousePos(null)}
-        >
+      {/* ── Hero — content and negative space, minimal chrome: eyebrow, a
+          normal-scale, confident (not dominant) headline, subhead, one
+          CTA. The earlier oversized doubled/ghost-text headline was a
+          misread of the reference and has been removed entirely — see
+          the correction that replaced it. DNAHelix stays as a faint
+          full-bleed backdrop. ── */}
+      <section
+        style={{
+          position: 'relative', height: 'calc(100vh - 65px)', minHeight: 560,
+          overflow: 'hidden', background: 'var(--bg)',
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+        }}
+        onMouseMove={e => {
+          const r = e.currentTarget.getBoundingClientRect()
+          setMousePos({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
+        }}
+        onMouseLeave={() => setMousePos(null)}
+      >
+        {/* Backdrop layer — full-bleed, faint, behind the text */}
+        <div style={{ position: 'absolute', inset: 0, opacity: 0.28, pointerEvents: 'none' }}>
           <DNAHelix mousePos={mousePos} />
         </div>
 
-        {/* Thin fade divider */}
-        <div
-          style={{
-            position: 'absolute', left: '55%', top: '10%',
-            height: '80%', width: 1, pointerEvents: 'none',
-            background: 'linear-gradient(to bottom, transparent, #D2D2D7 20%, #D2D2D7 80%, transparent)',
-          }}
-        />
-
-        {/* Zone 2 — text, right 45%, vertically centered */}
-        <div
-          style={{
-            position: 'absolute', right: 0, top: 0,
-            width: '45%', height: '100%',
-            display: 'flex', flexDirection: 'column', justifyContent: 'center',
-            padding: '0 60px 0 40px',
-            background: 'white',
-          }}
-        >
+        {/* Content — left-aligned, generous side margin, vertically centred */}
+        <div style={{ position: 'relative', zIndex: 1, padding: '0 5vw', maxWidth: 1100 }}>
           <p style={{
-            fontFamily: 'ui-monospace, monospace', color: '#6E6E73',
+            fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-body)',
             fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase',
-            marginBottom: 24,
+            marginBottom: 28,
           }}>
-            University of Bristol × AstraZeneca
+            University of Bristol &times; AstraZeneca
           </p>
-          <h1 style={{ color: '#1D1D1F', fontSize: 64, fontWeight: 800, lineHeight: 1.05, marginBottom: 20 }}>
-            Find the<br />right cell<br />line.
+
+          <h1
+            style={{
+              margin: 0, color: 'var(--text-heading)',
+              fontSize: 'clamp(2rem, 3.6vw, 2.75rem)', fontWeight: 700, lineHeight: 1.15,
+              letterSpacing: '-0.01em', maxWidth: 480,
+            }}
+          >
+            Find the right cell line.
           </h1>
-          <p style={{ color: '#6E6E73', fontSize: 17, lineHeight: 1.6, maxWidth: 380, marginBottom: 40 }}>
-            Multi-omics recommendation across 2,076 human cell lines.
-            Evidence-backed. Citable.
+
+          <p style={{ color: 'var(--text-body)', fontSize: 18, lineHeight: 1.6, maxWidth: 460, margin: '32px 0 0' }}>
+            Multi-omics recommendation across 2,076 cell lines,
+            evidence-backed and citable.
           </p>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Link
-              to="/search"
-              style={{
-                background: '#1D1D1F', color: 'white',
-                borderRadius: 50, padding: '14px 28px',
-                fontWeight: 600, fontSize: 15,
-                textDecoration: 'none', display: 'inline-block',
-              }}
-            >
-              Launch Tool →
-            </Link>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 40, marginTop: 48 }}>
+            {/* Primary CTA — underline-reveal, not a filled pill button */}
+            <UnderlineCTA to="/search">Launch Tool</UnderlineCTA>
             <Link
               to="/about"
-              style={{
-                background: 'transparent', border: '1.5px solid #D2D2D7',
-                color: '#1D1D1F', borderRadius: 50, padding: '14px 28px',
-                fontSize: 15, textDecoration: 'none', display: 'inline-block',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#1D1D1F' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#D2D2D7' }}
+              style={{ color: 'var(--text-body)', fontSize: 14, textDecoration: 'none' }}
             >
-              About
+              About the project
             </Link>
           </div>
         </div>
 
+        {/* Scroll cue — a thin line with a slow single fade pulse, no bounce */}
         <div
-          className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[#6E6E73] text-xs font-mono tracking-widest animate-bounce z-10"
+          className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2"
           style={{ pointerEvents: 'none' }}
         >
-          ↓ SCROLL
+          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-cso-body scroll-pulse">Scroll</span>
+          <div className="scroll-pulse" style={{ width: 1, height: 28, background: 'var(--border)' }} />
         </div>
       </section>
 
-      {/* ── Stats ── */}
-      <section className="bg-[#F5F5F7] py-14">
-        <div className="max-w-5xl mx-auto px-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
-            {statItems.map(s => (
-              <div key={s.label} className="text-center">
-                <div className="text-[#1D1D1F] font-bold text-3xl mb-1 tabular-nums">
-                  {s.value}
+      {/* ── Details — one flowing section (stats, capabilities, steps),
+          no bordered 3-card grid, no numbered-circle step tracker. Each
+          block reveals on scroll (Part 2). ── */}
+      <section className="bg-cso-bg" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="max-w-4xl mx-auto px-6 py-28">
+
+          {/* Stats — quiet, inline, mono */}
+          <Reveal className="mb-28">
+            <div className="flex flex-wrap gap-x-12 gap-y-4" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 40 }}>
+              {statItems.map(s => (
+                <div key={s.label}>
+                  <div className="font-mono font-bold tabular-nums" style={{ fontSize: 'clamp(2rem, 4vw, 3rem)', color: 'var(--text-heading)', lineHeight: 1 }}>
+                    {s.value}
+                  </div>
+                  <div className="text-[11px] uppercase tracking-[0.1em] text-cso-body mt-2">{s.label}</div>
                 </div>
-                <div className="text-[#6E6E73] text-xs uppercase tracking-widest">{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+              ))}
+            </div>
+          </Reveal>
 
-      {/* ── Three pillars ── */}
-      <section className="bg-white py-20">
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-[#1D1D1F] text-3xl font-bold mb-12 text-center">Lorem ipsum dolor sit amet</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {PILLARS.map(p => (
-              <div
-                key={p.title}
-                className="bg-white border border-[#D2D2D7] rounded-xl p-7"
-                style={{ boxShadow: '0 2px 20px rgba(0,0,0,0.06)' }}
-              >
-                <div className="w-8 h-0.5 bg-[#D2D2D7] mb-5" />
-                <h3 className="text-[#1D1D1F] font-bold text-lg mb-3">{p.title}</h3>
-                <p className="text-[#6E6E73] text-sm leading-relaxed">{p.body}</p>
-              </div>
-            ))}
+          {/* Capabilities — flowing list, large index numerals, not cards */}
+          <div className="mb-28">
+            <Reveal>
+              <h2 className="font-bold mb-14" style={{ fontSize: 'clamp(1.75rem, 3vw, 2.5rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+                What it does
+              </h2>
+            </Reveal>
+            <div>
+              {CAPABILITIES.map((c, i) => (
+                <Reveal key={c.n} delay={i * 60}>
+                  <div
+                    className="flex items-baseline gap-8 py-8"
+                    style={{ borderTop: '1px solid var(--border)' }}
+                  >
+                    <span className="font-mono flex-shrink-0" style={{ fontSize: '1.1rem', color: 'var(--text-body)' }}>
+                      {c.n}
+                    </span>
+                    <div>
+                      <h3 className="font-semibold mb-2" style={{ fontSize: '1.25rem', color: 'var(--text-heading)' }}>
+                        {c.title}
+                      </h3>
+                      <p className="text-cso-body leading-relaxed" style={{ fontSize: 15, maxWidth: 560 }}>{c.body}</p>
+                    </div>
+                  </div>
+                </Reveal>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
 
-      {/* ── Steps ── */}
-      <section className="bg-[#F5F5F7] py-20">
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-[#1D1D1F] text-3xl font-bold mb-12 text-center">Lorem ipsum</h2>
+          {/* Steps — compact, de-emphasised inline flow, no numbered circles */}
+          <Reveal>
+            <h2 className="font-bold mb-10" style={{ fontSize: 'clamp(1.75rem, 3vw, 2.5rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>
+              How to use it
+            </h2>
+          </Reveal>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
             {STEPS.map((step, i) => (
-              <div key={step.n} className="relative">
-                {i < STEPS.length - 1 && (
-                  <div className="hidden lg:block absolute top-5 left-full w-full h-px bg-[#D2D2D7] z-0 -translate-x-4" />
-                )}
-                <div className="w-10 h-10 bg-[#1D1D1F] text-white rounded-full flex items-center justify-center text-sm font-bold mb-4">
-                  {step.n}
-                </div>
-                <p className="text-[#6E6E73] text-sm leading-relaxed">{step.title}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Source cards ── */}
-      <section className="bg-white py-20">
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-[#1D1D1F] text-3xl font-bold mb-12 text-center">Lorem ipsum</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            {SOURCES.map(s => (
-              <div
-                key={s.key}
-                className="bg-white border border-[#D2D2D7] rounded-xl p-5"
-                style={{ boxShadow: '0 1px 8px rgba(0,0,0,0.04)' }}
-              >
-                <div className="text-[#6E6E73] font-mono font-bold text-xs mb-2">[{s.key}]</div>
-                <div className="text-[#1D1D1F] font-semibold text-sm mb-1">{s.name}</div>
-                <div className="text-[#6E6E73] text-xs leading-relaxed">{LOREM_BODY.slice(0, 60)}…</div>
-              </div>
+              <Reveal key={step.n} delay={i * 60}>
+                <div className="font-mono text-xs mb-2" style={{ color: 'var(--text-body)' }}>{step.n}</div>
+                <p className="font-semibold mb-1" style={{ fontSize: 15, color: 'var(--text-heading)' }}>{step.title}</p>
+                <p className="text-cso-body text-xs leading-relaxed">{step.body}</p>
+              </Reveal>
             ))}
           </div>
         </div>
       </section>
 
       {/* ── Footer ── */}
-      <footer className="bg-[#F5F5F7] border-t border-[#D2D2D7] py-8">
+      <footer className="bg-cso-bg py-8" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row justify-between items-center gap-3">
-          <div className="text-[#6E6E73] text-xs">
-            CellSelector Omics · University of Bristol × AstraZeneca · MSc Group Project 2026
+          <div className="text-cso-body text-xs">
+            CellSelector Omics, University of Bristol &times; AstraZeneca, MSc Group Project 2026
           </div>
-          <div className="text-[#6E6E73] font-mono text-xs">v1.0</div>
+          <div className="text-cso-body font-mono text-xs">v1.0</div>
         </div>
       </footer>
     </div>
