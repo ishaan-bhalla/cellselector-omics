@@ -314,4 +314,3 @@ def score_pathway_ssgsea(gene: str) -> pd.DataFrame:
     }
     _SSGSEA_CACHE[gene] = result
     return result
-

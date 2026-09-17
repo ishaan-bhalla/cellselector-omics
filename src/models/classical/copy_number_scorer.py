@@ -228,4 +228,3 @@ def score_copy_number(gene: str) -> pd.DataFrame:
     result = sub[["cellosaurus_id", "copy_number_score", "copy_number_detail"]].reset_index(drop=True)
     _CN_CACHE[gene] = result
     return result
-

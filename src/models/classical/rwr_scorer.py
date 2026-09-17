@@ -234,4 +234,3 @@ if __name__ == "__main__":
     with open(RWR_SCORES_FILE, "w", encoding="utf-8") as f:
         json.dump(scores, f)
     print(f"Wrote {RWR_SCORES_FILE} ({sum(len(v) for v in scores.values())} gene-cellline entries)")
-
