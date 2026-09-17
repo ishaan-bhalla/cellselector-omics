@@ -1,35 +1,187 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import ResultCard from '../components/ResultCard'
+import ResultCardGrid from '../components/ResultCardGrid'
+import ResultCardCompact from '../components/ResultCardCompact'
 import SlideOver from '../components/SlideOver'
+import Reveal from '../components/Reveal'
+import AutocompleteInput from '../components/AutocompleteInput'
+import type { ViewMode } from '../utils/viewMode'
+import { useSearch, LOADING_LINES } from '../context/SearchContext'
 
-const LOADING_LINES = [
-  '> Resolving gene symbol…',
-  '> Computing RNA expression scores…',
-  '> Applying protein expression weights…',
-  '> Running GEO cross-validation…',
-  '> Ranking 2,076 cell lines…',
-  '> Computing similarity alternatives…',
-  '> Analysis complete.',
-]
+// Safety cap on multi-gene search size, mirroring api/models.py's
+// MAX_ADDITIONAL_GENES. NOT a permanent feature limit — the parallelized
+// multi-gene rank() fetch (models.classical.multi_gene_ranker) was only
+// load-tested up to 2 total genes; that test showed the server's memory
+// spiking to ~57% of the VM's total before releasing. Beyond that is
+// unverified, so the backend rejects (422) anything over this cap and the
+// UI hides "+ Add another gene" at the same point rather than letting a
+// user hit that rejection. Keep this in sync with the backend value —
+// raise only after isolated, memory-capped testing confirms headroom.
+const MAX_ADDITIONAL_GENES = 1
 
-export default function Search() {
-  const [gene, setGene] = useState('')
+interface Props {
+  viewMode: ViewMode
+}
+
+export default function Search({ viewMode }: Props) {
+  // Form-field state (gene/additionalGenes/diseaseFilter/excludeGenes/
+  // topN) now lives in SearchContext, the same place loading/results/
+  // error/loadLine already did — see the module docstring on
+  // SearchContext.tsx. That's what makes it survive Search -> Home/About/
+  // Data -> Search navigation (the Provider is mounted above the router,
+  // so it isn't torn down) while still resetting to empty on a hard
+  // refresh (plain in-memory state, no sessionStorage — a hard refresh
+  // wipes JS memory and remounts the Provider fresh). This replaces the
+  // old sessionStorage-backed version (Item 6), which persisted across a
+  // hard refresh too and incorrectly restored a stale typed-in query.
+  const {
+    classical, runClassicalSearch,
+    gene, setGene,
+    additionalGenes, setAdditionalGenes,
+    diseaseFilter, setDiseaseFilter,
+    excludeGenes, setExcludeGenes,
+    topN, setTopN,
+  } = useSearch()
+  // `results` is aliased to `allResults` so the rest of this file (written
+  // before the Item 3 refactor) needs no further renaming below.
+  const { loading, error: fetchError, results: allResults, loadLine } = classical
+  // Per-gene stats (found/sources/cell-line count) for the gene actually
+  // SELECTED from the dropdown — no longer fetched per keystroke, so
+  // there's no async request in flight during typing to race against.
+  // UI-only (not part of what the task scoped into SearchContext), so it
+  // stays local — a hard refresh or fresh Search mount just re-fetches it
+  // from the (context-persisted) `gene` value, see the mount effect below.
   const [geneInfo, setGeneInfo] = useState<any>(null)
   const [geneLoading, setGeneLoading] = useState(false)
-  const [diseaseFilter, setDiseaseFilter] = useState('')
-  const [lineageFilter, setLineageFilter] = useState('')
-  const [excludeGenes, setExcludeGenes] = useState('')
-  const [topN, setTopN] = useState(10)
-  const [allResults, setAllResults] = useState<any>(null)
-  const [pathwayResults, setPathwayResults] = useState<any[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [loadLine, setLoadLine] = useState(0)
+  // Tissue Type (lineage_filter) removed per user testing feedback — see
+  // the Item 4 note further down at the request-building call site for
+  // what was checked before removing it.
+  const [excludeGeneDraft, setExcludeGeneDraft] = useState('')
+  const [showAddExclude, setShowAddExclude] = useState(false)
+  // Pre-submit validation (e.g. "can't search for and exclude the same
+  // gene") happens here, BEFORE runClassicalSearch is even called, so it
+  // can't reuse the context's post-fetch `error` — kept as its own local
+  // state and combined with fetchError only when rendering the banner.
+  const [formError, setFormError] = useState<string | null>(null)
+  const error = formError ?? fetchError
   const [selectedCVCL, setSelectedCVCL] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Full gene list, fetched once on mount — see the useEffect below.
+  // Client-side filtering of this replaces the old per-keystroke
+  // /genes/search autocomplete entirely (eliminates both the backend load
+  // and the out-of-order-response race condition class debugged tonight,
+  // structurally — there's no per-keystroke fetch left to race).
+  const [allGenes, setAllGenes] = useState<string[]>([])
+  // Distinct disease values, fetched once on mount the same way — powers
+  // the Disease Filter's dropdown (Item 1), replacing the old free-text
+  // input with the same client-side-filtered pattern as the gene fields.
+  const [diseases, setDiseases] = useState<string[]>([])
+  // Tracks which gene the in-flight one-time stats fetch (fired on
+  // dropdown selection, see selectGene) is actually FOR — a minimal,
+  // ref-based guard (not the AbortController machinery removed from the
+  // old per-keystroke path) so that if a user selects a second gene
+  // before the first stats fetch resolves, the stale response can't
+  // silently overwrite the newer one. Deliberately kept minimal: nothing
+  // to cancel, just "is this response still the one we care about".
+  const selectedGeneRef = useRef('')
+  // Additional genes for a combined multi-gene search (see handleSearch's
+  // additional_genes wiring) — separate from `gene` (the primary; both
+  // now come from context, see above), plus a draft for whatever's
+  // currently being typed in the "add another gene" box, which clears
+  // after each successful add (unlike the primary input, which keeps
+  // showing the selected gene). The draft itself is UI-only (mid-typing,
+  // not a committed form value), so it stays local state.
+  const [additionalGeneDraft, setAdditionalGeneDraft] = useState('')
+  const [showAddGene, setShowAddGene] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+  // viewMode/onViewModeChange now come in as props — lifted to App.tsx so
+  // the corrected-direction Navbar can host the control in its centre
+  // zone and stay in sync in real time (see App.tsx).
+  // Keeps the loading takeover MOUNTED for a brief window after `loading`
+  // flips false, so its collapse (Part 4) is a CSS transition rather than
+  // an instant unmount — see the takeover's own maxHeight/opacity, which
+  // key off `loading` directly while this only controls whether it's in
+  // the DOM at all.
+  const [takeoverVisible, setTakeoverVisible] = useState(false)
+
+  useEffect(() => {
+    api.getAllGenes()
+      .then(d => setAllGenes(d.genes ?? []))
+      .catch(() => setAllGenes([]))
+    api.getAllDiseases()
+      .then(d => setDiseases(d.diseases ?? []))
+      .catch(() => setDiseases([]))
+  }, [])
+
+  // Restores the "found, N sources, N cell lines" confirmation line for a
+  // gene carried over from a previous in-app visit — geneInfo itself
+  // isn't context state (kept local, see above), so this just re-runs the
+  // same lookup selecting a gene already triggers, mount-only (the `[]`
+  // deps — this must NOT re-fire on every `gene` change, or it would
+  // clobber selectGene's own normal per-selection fetch). On a hard
+  // refresh `gene` itself is already reset to '' by SearchContext, so
+  // this simply does nothing that time — no separate reset needed here.
+  useEffect(() => {
+    if (gene) selectGene(gene)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Form-field AND results persistence both now live entirely in
+  // SearchContext as plain in-memory state (no sessionStorage anywhere in
+  // this file any more) — see the module docstring on SearchContext.tsx.
+
+  useEffect(() => {
+    if (loading) {
+      setTakeoverVisible(true)
+      return
+    }
+    const t = setTimeout(() => setTakeoverVisible(false), 420)
+    return () => clearTimeout(t)
+  }, [loading])
+
+  const selectGene = async (g: string) => {
+    setGene(g)
+    selectedGeneRef.current = g
+    setGeneInfo(null)
+    setGeneLoading(true)
+    try {
+      const r = await api.searchGene(g)
+      if (selectedGeneRef.current === g) setGeneInfo(r)
+    } catch {
+      if (selectedGeneRef.current === g) setGeneInfo(null)
+    } finally {
+      if (selectedGeneRef.current === g) setGeneLoading(false)
+    }
+  }
+
+  const addAdditionalGene = (g: string) => {
+    setAdditionalGeneDraft('')
+    if (g === gene || additionalGenes.includes(g)) return
+    // Defensive guard matching the cap enforced above (the add UI is
+    // hidden once the cap is reached, so this shouldn't normally fire,
+    // but keeps this function safe to call from anywhere).
+    setAdditionalGenes(prev =>
+      prev.length >= MAX_ADDITIONAL_GENES ? prev : [...prev, g]
+    )
+  }
+
+  const removeAdditionalGene = (g: string) => {
+    setAdditionalGenes(prev => prev.filter(x => x !== g))
+  }
+
+  // Exclude Genes — same chip pattern as additionalGenes (Item 1), no cap
+  // (there was never one on the old free-text comma-separated field this
+  // replaces, so none is introduced here either).
+  const addExcludeGene = (g: string) => {
+    setExcludeGeneDraft('')
+    if (g === gene || excludeGenes.includes(g)) return
+    setExcludeGenes(prev => [...prev, g])
+  }
+
+  const removeExcludeGene = (g: string) => {
+    setExcludeGenes(prev => prev.filter(x => x !== g))
+  }
 
   useEffect(() => {
     if (!exportOpen) return
@@ -42,65 +194,38 @@ export default function Search() {
     return () => document.removeEventListener('mousedown', handler)
   }, [exportOpen])
 
-  useEffect(() => {
-    if (!gene.trim()) { setGeneInfo(null); return }
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      setGeneLoading(true)
-      try {
-        const r = await api.searchGene(gene.trim().toUpperCase())
-        setGeneInfo(r)
-      } catch {
-        setGeneInfo(null)
-      } finally {
-        setGeneLoading(false)
-      }
-    }, 300)
-  }, [gene])
-
-  useEffect(() => {
-    if (!loading) { setLoadLine(0); return }
-    const id = setInterval(() => setLoadLine(l => Math.min(l + 1, LOADING_LINES.length - 1)), 650)
-    return () => clearInterval(id)
-  }, [loading])
-
-  const handleSearch = async () => {
+  // Item 3: the actual fetch now lives in SearchContext's
+  // runClassicalSearch — this just does pre-submit validation, then
+  // freezes the current form values into the call (matching how
+  // allResults.query already reflects the frozen query a response came
+  // back with, elsewhere in this file — editing the form again while a
+  // search is in flight correctly does NOT retroactively change what's
+  // being fetched).
+  const handleSearch = () => {
     const g = gene.trim().toUpperCase()
     if (!g) return
 
-    const excludeList = excludeGenes
-      ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-      : []
-    if (excludeList.includes(g)) {
-      setError(`Cannot search for ${g} and exclude it at the same time.`)
+    if (excludeGenes.includes(g)) {
+      setFormError(`Cannot search for ${g} and exclude it at the same time.`)
       return
     }
+    setFormError(null)
 
-    setLoading(true); setAllResults(null); setPathwayResults(null); setError(null)
-    try {
-      const diseaseFilterVal = diseaseFilter.trim() || undefined
-      // Pathway-connected recommendations are fetched alongside the main
-      // search, not on a separate user action. A failure here (e.g. the
-      // gene isn't yet ingested into the graph) shouldn't break the main
-      // results, so it's caught independently rather than via the outer catch.
-      const [r, pw] = await Promise.all([
-        api.recommendClassical({
-          gene: g,
-          disease_filter: diseaseFilterVal,
-          lineage_filter: lineageFilter.trim() || undefined,
-          exclude_genes: excludeList.length ? excludeList : undefined,
-          top_n: 50,
-        }),
-        api.cellLinesViaPathway(g, diseaseFilterVal, 5).catch(() => null),
-      ])
-      if (r.detail) throw new Error(r.detail)
-      setAllResults(r)
-      setPathwayResults(pw?.results ?? null)
-    } catch (e: any) {
-      setError(e?.message ?? 'Request failed. Is the API running on port 8001?')
-    } finally {
-      setLoading(false)
-    }
+    // Pathway-Connected Recommendations (the section that used to render
+    // below the main results, fetched alongside the main search) was
+    // removed per user testing feedback (Item 7) — rigorous evaluation
+    // established pathway-coherence scoring doesn't earn a dedicated,
+    // prominent UI section (see ranker.py / pathway_scorer.py; the
+    // backend scoring itself is UNTOUCHED, still correctly weighted for
+    // loss-of-function genes — this was a UI declutter only).
+    runClassicalSearch({
+      gene: g,
+      additionalGenes,
+      diseaseFilter: diseaseFilter.trim() || undefined,
+      // lineage_filter removed (Item 4 of the prior task) — Tissue Type
+      // no longer collected, so nothing is sent for it any more.
+      excludeGenes,
+    })
   }
 
   const exportJSON = () => {
@@ -129,7 +254,7 @@ export default function Search() {
 
   const exportPDF = async () => {
     if (!allResults?.session_id) {
-      alert('No session available — run a search first')
+      alert('No session available, run a search first')
       return
     }
     const response = await fetch(`/recommend/export/pdf?session_id=${allResults.session_id}`)
@@ -153,113 +278,260 @@ export default function Search() {
   // Actual weights the API used for this query (learned or fixed) — the
   // scoring panel reads real numbers from here rather than hardcoding them,
   // since learned weights (the default) don't match any fixed percentage.
+  // For a multi-gene query, weights_used is {gene: {...weights}, ...} —
+  // a different shape the single-gene panel below doesn't understand, so
+  // it's gated off entirely for multi-gene rather than shown garbled.
   const w = allResults?.weights_used
+  const isMultiGene = (allResults?.query?.additional_genes?.length ?? 0) > 0
 
-  const geneFound = geneInfo?.found === true
-  const sourcesFound = geneFound
+  // geneInfo is now only ever populated by selectGene() for a gene already
+  // confirmed present in allGenes — a "not found" state is structurally
+  // unreachable through the dropdown, so there's no error branch to render
+  // here any more (see STEP 3 of the client-side-autocomplete task).
+  const sourcesFound = geneInfo?.sources
     ? Object.entries(geneInfo.sources as Record<string, boolean>)
         .filter(([, v]) => v).map(([k]) => k).join(' · ')
     : ''
 
-  const inputCls = `w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] px-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]`
+  const inputCls = `w-full bg-cso-card border border-[var(--border)] text-[var(--text-heading)] px-4 py-2.5 rounded text-sm focus:outline-none focus:border-[var(--text-heading)] transition-colors placeholder-[var(--border)]`
 
   return (
-    <div className="min-h-screen bg-white pt-24">
+    <div className="min-h-screen bg-cso-bg">
       {/* Search panel */}
-      <div className="bg-white border-b border-[#D2D2D7]">
+      <div className="bg-cso-card border-b border-[var(--border)] pt-10">
         <div className="max-w-3xl mx-auto px-6 pb-8">
-          <p className="text-[#6E6E73] text-xs tracking-[0.2em] uppercase mb-2">Cell Line Recommender</p>
-          <h1 className="text-[#1D1D1F] text-3xl font-bold mb-8">Search Tool</h1>
+          <p className="text-[var(--text-body)] text-xs tracking-[0.2em] uppercase mb-3">Cell Line Recommender</p>
+          <h1 className="font-bold mb-8" style={{ fontSize: 'clamp(2rem, 4.5vw, 3.25rem)', color: 'var(--text-heading)', letterSpacing: '-0.01em' }}>Search Tool</h1>
 
-          {/* Gene input */}
+          {/* Gene input — client-side-filtered dropdown via the shared
+              AutocompleteInput. Item 5: the additional-gene slot sits
+              directly BESIDE the primary field (same flex row, same
+              flex-1 width, same input styling) rather than appearing
+              below it in a different style — the "+ Add another gene"
+              trigger, the open draft input, and the selected-gene chip
+              all render AT that second position, never elsewhere, so the
+              two consistently read as one adjacent pair regardless of
+              which of those three states slot 2 is in. */}
           <div className="mb-5">
-            <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">Gene Name</label>
-            <div className="relative">
-              <input
-                type="text"
-                value={gene}
-                onChange={e => setGene(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                placeholder="e.g. EGFR, BRCA1, KIT"
-                autoFocus
-                className="w-full bg-white border border-[#D2D2D7] text-[#1D1D1F] font-mono text-lg px-4 py-3 rounded-xl focus:outline-none focus:border-[#1D1D1F] transition-colors placeholder-[#D2D2D7]"
-                style={{ boxShadow: gene ? '0 0 0 3px rgba(29,29,31,0.06)' : undefined }}
-              />
-              {geneLoading && (
-                <div className="absolute right-3.5 top-4">
-                  <div className="w-4 h-4 border border-[#D2D2D7] border-t-[#1D1D1F] rounded-full animate-spin" />
+            <label className="text-[var(--text-body)] text-xs uppercase tracking-widest block mb-2">
+              Gene Name{additionalGenes.length > 0 || showAddGene ? ' + Additional Gene' : ''}
+            </label>
+            <div className="flex gap-3 items-start">
+              <div className="relative flex-1">
+                <AutocompleteInput
+                  value={gene}
+                  onChange={v => { setGene(v); setGeneInfo(null) }}
+                  onSelect={selectGene}
+                  options={allGenes}
+                  excludeFromSuggestions={additionalGenes}
+                  placeholder="e.g. EGFR, BRCA1, KIT"
+                  autoFocus
+                />
+                {geneLoading && (
+                  <div className="absolute right-3.5 top-4">
+                    <div className="w-4 h-4 border border-[var(--border)] border-t-[var(--text-heading)] rounded-full animate-spin" />
+                  </div>
+                )}
+              </div>
+
+              {additionalGenes.length > 0 ? (
+                // Selected — rendered in the exact same box styling as the
+                // AutocompleteInput's own <input> (same border/height/
+                // font), so it still reads as the second half of the
+                // pair, not a chip stuck somewhere else.
+                <div className="flex-1 flex items-center justify-between bg-cso-card border border-[var(--border)] rounded px-4 py-3">
+                  <span className="font-mono text-lg text-[var(--text-heading)]">{additionalGenes[0]}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAdditionalGene(additionalGenes[0])}
+                    aria-label={`Remove ${additionalGenes[0]}`}
+                    className="text-[var(--text-body)] hover:text-[var(--accent-amber)] transition-colors leading-none text-xl"
+                  >
+                    ×
+                  </button>
                 </div>
+              ) : showAddGene ? (
+                <div className="relative flex-1">
+                  <AutocompleteInput
+                    value={additionalGeneDraft}
+                    onChange={setAdditionalGeneDraft}
+                    onSelect={addAdditionalGene}
+                    options={allGenes}
+                    excludeFromSuggestions={[gene]}
+                    placeholder="Add another gene…"
+                    autoFocus
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowAddGene(true)}
+                  className="flex-1 flex items-center justify-center text-sm text-[var(--text-body)] hover:text-[var(--text-heading)] border border-dashed border-[var(--border)] hover:border-[var(--text-heading)] rounded px-4 py-3 transition-colors"
+                  style={{ minHeight: 52 }}
+                >
+                  + Add another gene
+                </button>
               )}
             </div>
             {geneInfo && !geneLoading && (
-              <div className={`mt-2 text-xs font-mono ${geneFound ? 'text-[#2D6A4F]' : 'text-[#C62828]'}`}>
-                {geneFound
-                  ? `✓ ${gene.toUpperCase()} — ${sourcesFound} — ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`
-                  : `✗ ${gene.toUpperCase()} not found in any omics source`}
+              <div className="mt-2 text-xs font-mono text-[var(--text-heading)]">
+                {`${geneInfo.gene ?? gene.toUpperCase()}, ${sourcesFound}, ${geneInfo.total_cell_lines_with_data?.toLocaleString()} cell lines`}
               </div>
+            )}
+            {additionalGenes.length >= MAX_ADDITIONAL_GENES && (
+              <p
+                className="mt-2 text-xs text-[var(--text-body)]"
+                title="Temporary memory-safety limit on this server, not a permanent feature restriction."
+              >
+                Maximum {MAX_ADDITIONAL_GENES + 1} genes per search
+              </p>
             )}
           </div>
 
-          {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
-            {[
-              { label: 'Disease Filter',           value: diseaseFilter, set: setDiseaseFilter, ph: 'e.g. lung, breast' },
-              { label: 'Tissue Type',               value: lineageFilter, set: setLineageFilter, ph: 'e.g. lung, breast, epithelial' },
-              { label: 'Exclude Genes (comma sep)', value: excludeGenes,  set: setExcludeGenes,  ph: 'e.g. KRAS, NRAS' },
-            ].map(({ label, value, set, ph }) => (
-              <div key={label}>
-                <label className="text-[#6E6E73] text-xs uppercase tracking-widest block mb-2">{label}</label>
-                <input
-                  type="text" value={value}
-                  onChange={e => set(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                  placeholder={ph}
-                  className={inputCls}
+          {/* Filters — Disease Filter now a dropdown of real distinct
+              disease values (Item 1); Exclude Genes now a multi-select
+              chip picker reusing the exact gene list (Item 1); Tissue
+              Type removed entirely (Item 4). Each still carries a
+              bracket-syntax state marker (Part 6). */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+            <div>
+              <label className="text-[var(--text-body)] text-xs uppercase tracking-widest flex items-center justify-between mb-2">
+                Disease Filter
+                <span className="font-mono text-[10px]" style={{ color: diseaseFilter.trim() ? 'var(--text-heading)' : 'var(--muted-state)' }}>
+                  DISEASE:[{diseaseFilter.trim() ? 'SET' : '—'}]
+                </span>
+              </label>
+              <AutocompleteInput
+                value={diseaseFilter}
+                onChange={setDiseaseFilter}
+                onSelect={setDiseaseFilter}
+                options={diseases}
+                matchAnywhere
+                placeholder="e.g. Lung Cancer, Breast Cancer"
+                size="sm"
+              />
+            </div>
+
+            <div>
+              <label className="text-[var(--text-body)] text-xs uppercase tracking-widest flex items-center justify-between mb-2">
+                Exclude Genes
+                <span className="font-mono text-[10px]" style={{ color: excludeGenes.length ? 'var(--text-heading)' : 'var(--muted-state)' }}>
+                  EXCLUDE:[{excludeGenes.length ? 'SET' : '—'}]
+                </span>
+              </label>
+              {excludeGenes.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {excludeGenes.map(g => (
+                    <span
+                      key={g}
+                      className="inline-flex items-center gap-1.5 text-xs font-mono bg-[var(--bg)] text-[var(--text-heading)] px-2.5 py-1 rounded-full"
+                    >
+                      {g}
+                      <button
+                        type="button"
+                        onClick={() => removeExcludeGene(g)}
+                        aria-label={`Remove ${g}`}
+                        className="text-[var(--text-body)] hover:text-[var(--accent-amber)] transition-colors leading-none"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {showAddExclude ? (
+                <AutocompleteInput
+                  value={excludeGeneDraft}
+                  onChange={setExcludeGeneDraft}
+                  onSelect={addExcludeGene}
+                  options={allGenes}
+                  excludeFromSuggestions={[gene, ...excludeGenes]}
+                  placeholder="Add a gene to exclude…"
+                  autoFocus
+                  size="sm"
                 />
-              </div>
-            ))}
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowAddExclude(true)}
+                  className={`${inputCls} text-left text-[var(--text-body)] hover:border-[var(--text-heading)]`}
+                >
+                  + Add gene to exclude…
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-4 flex-wrap">
             <div className="flex items-center gap-2">
-              <label className="text-[#6E6E73] text-xs uppercase tracking-widest">Top</label>
+              <label className="text-[var(--text-body)] text-xs uppercase tracking-widest">Top</label>
               <select
                 value={topN}
                 onChange={e => setTopN(Number(e.target.value))}
-                className="bg-white border border-[#D2D2D7] text-[#1D1D1F] px-3 py-2 rounded-xl text-sm focus:outline-none"
+                className="bg-cso-card border border-[var(--border)] text-[var(--text-heading)] px-3 py-2 rounded text-sm focus:outline-none"
               >
-                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                {/* "Top 50" removed (Item 9, STEP 3) — the backend fetch
+                    is capped at top_n: 20 (see handleSearch), so 50 was
+                    always a dead/mismatched option anyway (it never
+                    displayed more than the 20 actually fetched). */}
+                {[5, 10, 20].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
             <button
               onClick={handleSearch}
               disabled={!gene.trim() || loading}
-              className="flex-1 bg-[#1D1D1F] text-white font-semibold py-3 rounded-xl hover:bg-[#333333] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 bg-cso-heading font-semibold py-3 rounded hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ color: 'var(--bg)' }}
             >
-              {loading ? 'Running…' : 'Run Analysis →'}
+              {loading ? 'Running' : 'Run Analysis'}
             </button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        {/* Loading terminal */}
-        {loading && (
-          <div className="bg-[#F5F5F7] border border-[#D2D2D7] rounded-xl p-4 font-mono text-xs mb-8">
-            {LOADING_LINES.slice(0, loadLine + 1).map((line, i) => (
-              <div key={i} className="text-[#6E6E73]">
-                {line}
-                {i === loadLine && i < LOADING_LINES.length - 1 && (
-                  <span className="animate-pulse ml-0.5 text-[#1D1D1F]">█</span>
-                )}
-              </div>
-            ))}
+      {/* Search-execution takeover — a genuine full-width moment while a
+          search runs, not a small box below the form: expands to become
+          the visual focus, then collapses smoothly (maxHeight/opacity
+          transition, kept mounted an extra ~420ms via takeoverVisible so
+          the collapse is visible rather than an instant unmount) into the
+          results below. Item 4: only ONE line is ever rendered — keyed by
+          loadLine, so each new line is a fresh element at the exact same
+          position (not appended below the last), triggering the
+          .console-line fade-up-in keyframe on entry; the previous line is
+          simply replaced, not left stacked. "Analysis complete" is gone
+          as a displayed line entirely — seeing the results IS the
+          completion signal; the sequence just holds on the last real
+          line (LOADING_LINES has no completion line any more) until the
+          takeover collapses on its own. */}
+      {takeoverVisible && (
+        <div
+          className="w-full overflow-hidden"
+          style={{
+            maxHeight: loading ? 640 : 0,
+            opacity: loading ? 1 : 0,
+            borderBottom: loading ? '1px solid var(--border)' : '1px solid transparent',
+            transition: 'max-height 420ms ease, opacity 280ms ease, border-color 420ms ease',
+          }}
+        >
+          <div className="max-w-4xl mx-auto px-6" style={{ paddingTop: 96, paddingBottom: 96 }}>
+            <div
+              key={loadLine}
+              className="console-line font-mono"
+              style={{ fontSize: 'clamp(1rem, 2.4vw, 1.65rem)', color: 'var(--text-heading)' }}
+            >
+              {LOADING_LINES[loadLine]}
+              {loadLine < LOADING_LINES.length - 1 && (
+                <span className="animate-pulse ml-1" style={{ color: 'var(--text-heading)' }}>_</span>
+              )}
+            </div>
           </div>
-        )}
+        </div>
+      )}
 
+      <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Error */}
         {error && (
-          <div className="bg-[#FCE4EC] border border-[#F8BBD9] rounded-xl p-4 text-[#C62828] text-sm mb-6">
+          <div className="bg-cso-card border border-[var(--accent-amber)] rounded p-4 text-[var(--accent-amber)] text-sm mb-6">
             {error}
           </div>
         )}
@@ -267,172 +539,165 @@ export default function Search() {
         {/* Results */}
         {allResults && !loading && (
           <>
-            {/* Scoring transparency panel */}
-            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-xs text-[#6E6E73] leading-relaxed">
-              <div className="font-semibold text-black mb-2">
-                How Fit Score is computed
-              </div>
-              <p>
-                Each cell line is scored across five weighted
-                dimensions: <strong>RNA Expression</strong>{' '}
-                ({w?.rna ? (w.rna * 100).toFixed(0) : '?'}%)
-                measures transcript abundance across HPA and
-                DepMap; <strong>Protein</strong>{' '}
-                ({w?.protein ? (w.protein * 100).toFixed(0) : '?'}%) measures
-                protein abundance from CCLE proteomics;{' '}
-                <strong>Data Quality</strong>{' '}
-                ({w?.quality ? (w.quality * 100).toFixed(0) : '?'}%) reflects
-                cross-source agreement and data completeness;{' '}
-                <strong>Context</strong>{' '}
-                ({w?.context ? (w.context * 100).toFixed(0) : '?'}%) rewards disease
-                and tissue match to your search filter;{' '}
-                <strong>Pathway Activity</strong>{' '}
-                ({w?.pathway ? (w.pathway * 100).toFixed(0) : '10'}%) measures
-                how many genes sharing a KEGG pathway with your
-                target are also expressed in this cell line. GEO
-                expression acts as a confirmatory bonus
-                (up to +10%). Weights are optimised by maximising
-                Mean Reciprocal Rank against 25 validated
-                gene-cell-line associations from the literature.
-              </p>
-              <p className="mt-2">
-                Fit Score combines five evidence dimensions with
-                weights that are automatically optimized per gene
-                class using Mean Reciprocal Rank against 25
-                validated gene-cell-line associations. The system
-                discovered that pathway activity improves ranking
-                accuracy for hormone receptors and broadly-expressed
-                genes, but can introduce noise for receptor tyrosine
-                kinases where direct expression is already the
-                decisive signal — so pathway weight is tuned
-                independently per gene class. The percentages above
-                reflect the weights actually applied to{' '}
-                {allResults.query?.gene ?? gene}, a{' '}
-                {displayedResults?.results?.[0]?.gene_class?.replace(/_/g, ' ') ?? 'classified'}{' '}
-                gene.
-              </p>
-            </div>
+            {/* The old permanent "How Fit Score is computed" panel is gone
+                (Item 2) — that explanation is now a hover/focus popover
+                anchored to each card's own Fit Score element (FitRing or
+                its numeral), showing THAT card's real weights via
+                weightsUsed rather than one static block above every
+                result. See components/FitScoreExplanation.tsx and
+                HoverPopover.tsx, wired into ResultCard/ResultCardGrid/
+                ResultCardCompact below. */}
 
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
               <div>
-                <div className="text-[#1D1D1F] font-bold text-lg">
-                  Showing {displayedResults?.results.length} of {allResults.results?.length} loaded for{' '}
-                  <span className="font-mono">{allResults.query?.gene}</span>
+                <div style={{ color: 'var(--text-heading)', fontWeight: 700, fontSize: '1.75rem', letterSpacing: '-0.01em', lineHeight: 1.15 }}>
+                  Showing {displayedResults?.results.length} of {allResults.results?.length} for{' '}
+                  <span className="font-mono">
+                    {isMultiGene
+                      ? [allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])].join(' + ')
+                      : allResults.query?.gene}
+                  </span>
                   {allResults.query?.disease_filter && (
-                    <span className="text-[#6E6E73] text-sm font-normal ml-2">
+                    <span className="text-[var(--text-body)] text-base font-normal ml-2">
                       in {allResults.query.disease_filter}
                     </span>
                   )}
                 </div>
-                <div className="text-[#6E6E73] text-xs mt-0.5 font-mono">
-                  {allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored
+                <div className="text-[var(--text-body)] text-xs mt-1.5 font-mono">
+                  {isMultiGene
+                    ? `${allResults.metadata?.n_excluded_missing_data ?? 0} lines excluded (missing data for ≥1 gene)`
+                    : `${allResults.metadata?.total_candidates?.toLocaleString()} total candidates scored`}
                   {allResults.metadata?.execution_time_ms && ` · ${allResults.metadata.execution_time_ms}ms`}
                 </div>
               </div>
-              <div className="relative" ref={exportMenuRef}>
-                <button
-                  onClick={() => setExportOpen(o => !o)}
-                  className="text-xs border border-[#D2D2D7] text-[#6E6E73] hover:text-[#1D1D1F] hover:border-[#1D1D1F] px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  Export ▾
-                </button>
-                {exportOpen && (
-                  <div className="absolute right-0 mt-2 w-32 bg-white border border-[#D2D2D7] rounded-lg shadow-lg z-10 overflow-hidden">
-                    {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
-                      <button
-                        key={label}
-                        onClick={() => { fn(); setExportOpen(false) }}
-                        className="w-full text-left px-4 py-2 hover:bg-[#F5F5F7] text-sm text-[#1D1D1F] transition-colors"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              <div className="flex items-center gap-3">
+                {/* View mode is now chosen from the navbar's centre zone
+                    (Part 2 of the corrected direction) — `viewMode` prop
+                    still drives which layout renders below. */}
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    onClick={() => setExportOpen(o => !o)}
+                    className="text-xs border border-[var(--border)] text-[var(--text-body)] hover:text-[var(--text-heading)] hover:border-[var(--text-heading)] px-3 py-1.5 rounded transition-colors"
+                  >
+                    Export
+                  </button>
+                  {exportOpen && (
+                    <div className="absolute right-0 mt-2 w-32 bg-cso-card border border-[var(--border)] rounded z-10 overflow-hidden">
+                      {([['JSON', exportJSON], ['CSV', exportCSV], ['PDF', exportPDF]] as [string, () => void][]).map(([label, fn]) => (
+                        <button
+                          key={label}
+                          onClick={() => { fn(); setExportOpen(false) }}
+                          className="w-full text-left px-4 py-2 hover:bg-[var(--bg)] text-sm text-[var(--text-heading)] transition-colors"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="space-y-4">
-              {(displayedResults!.results as any[]).map((r: any) => (
-                <ResultCard
-                  key={r.cellosaurus_id}
-                  result={r}
-                  gene={allResults.query?.gene ?? gene}
-                  diseaseFilter={allResults.query?.disease_filter}
-                  excludeGenes={
-                    excludeGenes
-                      ? excludeGenes.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-                      : undefined
-                  }
-                  onCellLineClick={setSelectedCVCL}
-                />
-              ))}
+            {/* Status bar — moved here, directly above the results list
+                (Item 8), so it's seen before scrolling through results
+                rather than only after. Same thin, dense chrome-bar
+                styling as the navbar, bracket-syntax metadata showing
+                live session/query state rather than decoration. */}
+            <div
+              className="bg-cso-bg flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 mb-4 font-mono"
+              style={{ border: '1px solid var(--border)', fontSize: 11 }}
+            >
+              <span style={{ color: 'var(--text-heading)' }}>
+                RESULTS:[{displayedResults?.results.length ?? 0}]
+              </span>
+              <span style={{ color: 'var(--text-body)' }}>
+                {isMultiGene
+                  ? [allResults.query?.gene, ...(allResults.query?.additional_genes ?? [])].join('+')
+                  : allResults.query?.gene}
+                {' · '}
+                {allResults.metadata?.total_candidates?.toLocaleString() ?? '0'} CANDIDATES
+              </span>
+              <span style={{ color: 'var(--text-body)' }}>
+                FILTERS:[{(diseaseFilter.trim() || excludeGenes.length) ? 'ON' : 'OFF'}]
+                {'  '}
+                MULTI-GENE:[{isMultiGene ? 'ON' : 'OFF'}]
+              </span>
             </div>
 
-            {/* Pathway-Connected Recommendations */}
-            <div className="mt-8 pt-8 border-t border-gray-200">
-              <h2 className="text-lg font-semibold mb-1">
-                Pathway-Connected Recommendations
-              </h2>
-              <p className="text-xs text-[#6E6E73] mb-4">
-                Cell lines strong for genes that share a
-                biological pathway with {allResults.query?.gene ?? gene}. These expand
-                your experimental options beyond direct{' '}
-                {allResults.query?.gene ?? gene} expression.
-              </p>
-              {pathwayResults === null ? (
-                <div className="text-xs text-[#6E6E73]">
-                  No pathway-connected data available for this gene yet — the knowledge
-                  graph currently only covers a curated set of validation genes.
-                </div>
-              ) : pathwayResults.length === 0 ? (
-                <div className="text-xs text-[#6E6E73]">
-                  No pathway-connected cell lines found for this gene.
-                </div>
-              ) : (
-                pathwayResults.map((r: any) => {
-                  const top = r.connecting_genes?.[0]
-                  const isDirect = top?.is_target
-                  return (
-                    <div
+            {/* Three real, distinct layouts over the same result data (Part
+                3) — not decoration: LIST is the existing full-detail
+                ResultCard, GRID a 2-column compact card, COMPACT a dense
+                single-line row. Each card reveals on scroll (Part 2). */}
+            {viewMode === 'list' && (
+              <div className="space-y-4">
+                {(displayedResults!.results as any[]).map((r: any, i: number) => (
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 6) * 40}>
+                    <ResultCard
+                      result={r}
+                      gene={allResults.query?.gene ?? gene}
+                      additionalGenes={allResults.query?.additional_genes}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      excludeGenes={excludeGenes.length ? excludeGenes : undefined}
+                      weightsUsed={w}
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  </Reveal>
+                ))}
+              </div>
+            )}
+
+            {viewMode === 'grid' && (
+              // 96-well microplate (corrected direction #2, replacing the
+              // prior edge-to-edge panel for GRID specifically) — a real,
+              // visible gap between circular wells, not the gutter-less
+              // hairline grid used elsewhere; that's a deliberate
+              // difference, not an inconsistency. Column count scales
+              // with viewport toward the ~8-column proportion of a real
+              // 96-well plate, fewer columns on narrower screens.
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3">
+                {(displayedResults!.results as any[]).map((r: any, i: number) => (
+                  <Reveal key={r.cellosaurus_id} delay={Math.min(i, 12) * 20}>
+                    <ResultCardGrid
+                      result={r}
+                      gene={allResults.query?.gene ?? gene}
+                      additionalGenes={allResults.query?.additional_genes}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      weightsUsed={w}
+                      isMultiGene={isMultiGene}
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  </Reveal>
+                ))}
+              </div>
+            )}
+
+            {viewMode === 'compact' && (
+              <Reveal>
+                <div className="bg-cso-card border border-[var(--border)] rounded overflow-hidden">
+                  {(displayedResults!.results as any[]).map((r: any) => (
+                    <ResultCardCompact
                       key={r.cellosaurus_id}
-                      className="border rounded-lg p-3 mb-2 cursor-pointer hover:border-[#1D1D1F] transition-colors"
-                      onClick={() => setSelectedCVCL(r.cellosaurus_id)}
-                    >
-                      <div className="flex justify-between">
-                        <div>
-                          <span className="font-medium">
-                            {r.official_name ?? r.cellosaurus_id}
-                          </span>
-                          {top && (
-                            <span
-                              className={`ml-2 text-xs px-2 py-0.5 rounded ${
-                                isDirect ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'
-                              }`}
-                            >
-                              {isDirect ? `direct: ${top.gene}` : `via ${top.gene}`}
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-sm">
-                          score {(r.max_score ?? 0).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
+                      result={r}
+                      gene={allResults.query?.gene ?? gene}
+                      additionalGenes={allResults.query?.additional_genes}
+                      diseaseFilter={allResults.query?.disease_filter}
+                      weightsUsed={w}
+                      onCellLineClick={setSelectedCVCL}
+                    />
+                  ))}
+                </div>
+              </Reveal>
+            )}
           </>
         )}
 
         {/* Empty state */}
         {!allResults && !loading && !error && (
           <div className="text-center py-24">
-            <div className="text-[#D2D2D7] text-6xl mb-5">⬡</div>
-            <div className="text-[#6E6E73] text-sm">
+            <div className="text-[var(--border)] text-6xl mb-5">⬡</div>
+            <div className="text-[var(--text-body)] text-sm">
               Enter a gene symbol above and press{' '}
-              <span className="text-[#1D1D1F] font-semibold">Run Analysis</span>
+              <span className="text-[var(--text-heading)] font-semibold">Run Analysis</span>
             </div>
           </div>
         )}
