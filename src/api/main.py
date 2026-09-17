@@ -24,7 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.config import CELL_LINE_LOOKUP, MASTER_MERGED, OUTPUTS_DIR, PARQUET_DIR
 from api.models import AgenticRequest, ClassicalRequest
 from src.models.agentic.growth_properties import get_growth_properties
+from src.models.classical.copy_number_scorer import (
+    AMPLIFICATION_DRIVEN_GENES,
+    apply_amplification_copy_number_weight,
+)
 from src.models.classical.ranker import FIXED_WEIGHTS, rank
+from src.models.classical.rwr_scorer import apply_rwr_weight
 from src.models.classical.scorer import classify_gene, get_gene_role
 from src.models.classical.similarity import DATASET_CITATIONS, find_alternatives
 from src.models.graph.queries import (
@@ -40,6 +45,57 @@ _PARQUET_SOURCES: dict[str, Path] = {
     "geo":        PARQUET_DIR / "gene_expr_geo_preprocessed.parquet",
     "proteomics": PARQUET_DIR / "gene_expr_ccle_proteomics_preprocessed.parquet",
 }
+
+# ── /recommend/agentic concurrency limit ───────────────────────────────────────
+# Reproduced directly: 3 concurrent agentic requests on this 2-vCPU VM all hit
+# nginx's 180s proxy_read_timeout (504) — none of the three, not just the
+# "extra" one, meaning concurrency multiplies each request's real completion
+# time well past what a single uncontended call takes (~40-160s), rather than
+# simply queueing behind each other. Raising the timeout further only
+# postpones the same failure at a slightly higher concurrency, and makes a
+# request that DOES succeed take uncomfortably long either way — this is a
+# genuine resource-contention limit on a demo-scale 2-vCPU deployment, not a
+# timeout-value problem, so it's mitigated by REJECTING immediately (503,
+# distinguishable from a raw timeout) beyond a safe concurrency ceiling,
+# rather than raising the timeout or silently queueing (which would just
+# shift the same timeout risk onto queued requests instead).
+#
+# Ceiling is 1, not 2 — verified empirically, not assumed. A first attempt
+# at 2 (one per vCPU) was tested with the SAME 3-concurrent reproduction:
+# the 3rd request correctly got an immediate 503, but the two ADMITTED
+# requests (within the ceiling of 2) still both individually hit nginx's
+# 180s proxy_read_timeout and 504'd — meaning 2 concurrent agentic calls
+# already exceed what this VM can complete in time, not just 3. Lowered to
+# 1 (fully serialized) based on that direct evidence, then re-verified with
+# the same reproduction (see the fix report) rather than left at the
+# theoretically-reasonable-but-empirically-wrong value of 2.
+_AGENTIC_MAX_CONCURRENT = 1
+_agentic_in_flight = 0
+_agentic_concurrency_lock = asyncio.Lock()
+
+
+@asynccontextmanager
+async def _agentic_concurrency_slot():
+    global _agentic_in_flight
+    async with _agentic_concurrency_lock:
+        if _agentic_in_flight >= _AGENTIC_MAX_CONCURRENT:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"AI justification is busy with {_agentic_in_flight} other "
+                    f"request(s) right now (this demo deployment handles "
+                    f"{_AGENTIC_MAX_CONCURRENT} AI justification request at a time). "
+                    f"Please wait a moment and try again — classical search "
+                    f"(/recommend/classical) is unaffected and stays fast."
+                ),
+            )
+        _agentic_in_flight += 1
+    try:
+        yield
+    finally:
+        async with _agentic_concurrency_lock:
+            _agentic_in_flight -= 1
+
 
 # ── Session store (keyed by UUID, max 100 entries) ────────────────────────────
 _MAX_SESSIONS = 100
@@ -154,6 +210,31 @@ async def lifespan(app: FastAPI):
             gene_sets[name] = set()
     app.state.gene_sets = gene_sets
 
+    # Precomputed gene -> cell-line-count lookup, for /genes/search's
+    # per-gene stats display. An EARLIER version of this fix tried loading
+    # the raw HPA/DepMap/GEO/proteomics source files into memory at
+    # startup — abandoned after directly measuring the actual cost: these
+    # files are 65-80 MILLION rows each (not "~750MB", the on-disk
+    # compressed size an earlier estimate wrongly used as a memory proxy);
+    # loading even the smallest of the four OOM-killed a 3GB-capped test
+    # container before finishing. This file instead is precomputed OFFLINE
+    # (scripts/precompute_gene_cellline_counts.py — see it for the exact
+    # same threshold/union logic _count_cell_lines_with_data used to use
+    # live, and for why it streams via pyarrow.iter_batches rather than
+    # loading full files), producing one gene->int per validated gene —
+    # ~750KB total, trivially safe to load here. Regenerate it whenever
+    # the underlying expression data changes (new parquet exports).
+    _gene_counts_path = OUTPUTS_DIR / "gene_cellline_counts.json"
+    if _gene_counts_path.exists():
+        with open(_gene_counts_path, encoding="utf-8") as f:
+            app.state.gene_cellline_counts = json.load(f)
+        print(f"[startup] Loaded {len(app.state.gene_cellline_counts)} precomputed gene cell-line counts")
+    else:
+        app.state.gene_cellline_counts = {}
+        print(f"[startup] WARNING: {_gene_counts_path} not found — "
+              f"/genes/search will report 0 cell lines for every gene until "
+              f"it's regenerated (see scripts/precompute_gene_cellline_counts.py)")
+
     eval_path = OUTPUTS_DIR / "model_evaluation.json"
     if eval_path.exists():
         with open(eval_path, encoding="utf-8") as f:
@@ -213,10 +294,15 @@ async def search_gene(q: str = Query(..., min_length=1), request: Request = None
     sources   = {name: (gene in gs) for name, gs in gene_sets.items()}
     found     = any(sources.values())
 
-    total_cl = 0
-    if found:
-        full = await asyncio.to_thread(rank, gene, None, None, None)
-        total_cl = len(full)
+    # Precomputed lookup (see lifespan()'s app.state.gene_cellline_counts)
+    # — a plain dict read, no per-request computation at all. Previously
+    # called score_rna_expression/score_protein_expression live, ~10-13s
+    # per gene (unindexed disk scans over the 65-80M-row source files);
+    # before that, the full rank() pipeline, ~12-13s. See
+    # scripts/precompute_gene_cellline_counts.py for how this is built —
+    # 0 for a gene missing from the precomputed file (should only happen
+    # for a gene added to a source file since the last regeneration).
+    total_cl = request.app.state.gene_cellline_counts.get(gene, 0) if found else 0
 
     return {
         "gene":                    gene,
@@ -224,6 +310,38 @@ async def search_gene(q: str = Query(..., min_length=1), request: Request = None
         "sources":                 sources,
         "total_cell_lines_with_data": total_cl,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b. GET /genes/all — full gene list, for client-side autocomplete
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/genes/all")
+async def get_all_genes(request: Request):
+    """
+    Return the complete list of gene symbols present in any integrated
+    data source. Powers client-side autocomplete (Search.tsx fetches this
+    ONCE on mount and filters it locally per keystroke) — no per-query
+    computation here at all, just a union + sort of the same in-memory
+    gene_sets /genes/search already reads from app.state.
+    """
+    gene_sets = request.app.state.gene_sets
+    all_genes = sorted(set().union(*gene_sets.values())) if gene_sets else []
+    return {"genes": all_genes, "count": len(all_genes)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2c. GET /diseases/all — distinct disease values, for the Disease Filter
+# dropdown (same client-side-autocomplete pattern as /genes/all above, not
+# a new endpoint style). Reads app.state.cell_line_lookup's own "disease"
+# column, already loaded at startup — 2,076 rows, so this is a trivial
+# in-memory .unique() + sort, no precompute file needed (unlike genes,
+# which had to union across several 65-80M-row source files).
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/diseases/all")
+async def get_all_diseases(request: Request):
+    lookup = request.app.state.cell_line_lookup
+    diseases = sorted(lookup["disease"].dropna().unique().tolist())
+    return {"diseases": diseases, "count": len(diseases)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +434,7 @@ def _build_classical_result(
         "pathway_genes_total":     int(row.get("pathway_genes_total") or 0),
         "mutation_impact_score":   round(_safe_float(row.get("mutation_impact_score")), 4),
         "mutation_detail":         str(row.get("mutation_detail") or ""),
+        "rwr_score":          round(_safe_float(row.get("rwr_score")), 4),
         "n_sources":          int(row.get("n_sources") or 0),
         "hpa_evidence":       row.get("hpa_evidence"),
         "depmap_evidence":    row.get("depmap_evidence"),
@@ -348,17 +467,154 @@ def _build_classical_result(
     }
 
 
+def _build_multi_gene_result(rank_pos: int, row: pd.Series, alts: list[dict]) -> dict:
+    """
+    Result item for a multi-gene combined search (additional_genes
+    non-empty) — a deliberately SMALLER schema than
+    _build_classical_result(), not that function reused with gaps papered
+    over. The single-gene evidence fields (rna_score, hpa_evidence,
+    pathway_activity_score, mutation_detail, ...) each belong to ONE
+    specific gene's scoring; there's no non-arbitrary choice of which
+    gene's value to show on a row that's about several genes at once, so
+    rather than silently pick one (misleading) or repeat all of them per
+    gene (a much bigger schema than asked for), those fields are omitted
+    entirely here. per_gene_percentiles / per_gene_scores (from
+    multi_gene_ranker.rank_multi_gene) already carry the equivalent
+    per-gene detail in an unambiguous, explicitly-keyed form — that's the
+    transparency mechanism for multi-gene, not a repurposed single-gene one.
+    gene_role is similarly gene-specific and left out for the same reason.
+
+    alternatives: unlike the fields above, DOES have a well-defined
+    multi-gene meaning (see similarity.find_alternatives_multi_gene) — a
+    cell line genuinely similar across the COMBINED queried-gene profile,
+    not just one gene while ignoring the rest. Same shape single-gene
+    alternatives already use, so no frontend special-casing is needed.
+    """
+    cvcl = row["cellosaurus_id"]
+    return {
+        "rank":                rank_pos,
+        "cellosaurus_id":      cvcl,
+        "official_name":       str(row.get("official_name") or cvcl),
+        "combined_score":      round(_safe_float(row.get("combined_score")), 4),
+        "alternatives": [
+            {
+                "official_name":     a["official_name"],
+                "cellosaurus_id":    a["cellosaurus_id"],
+                "similarity_score":  a["similarity_score"],
+                "similarity_reason": a["similarity_reason"],
+                "shared_data_types": a.get("shared_data_types", []),
+                "note":              a.get("note"),
+                "cellosaurus_url":   (
+                    a.get("citations", {}).get("cellosaurus_url")
+                    or f"https://www.cellosaurus.org/{a['cellosaurus_id']}"
+                ),
+            }
+            for a in alts
+        ],
+        "per_gene_percentiles": row.get("per_gene_percentiles"),
+        "per_gene_scores":      row.get("per_gene_scores"),
+        "disease":             str(row.get("disease") or ""),
+        "lineage":             str(row.get("lineage") or ""),
+        "growth_properties":   get_growth_properties(cvcl),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. POST /recommend/classical
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/recommend/classical")
 async def recommend_classical(body: ClassicalRequest):
-    if body.exclude_genes and body.gene.upper() in [g.upper() for g in body.exclude_genes]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot search for {body.gene} and exclude it simultaneously.",
-        )
+    all_query_genes = [body.gene] + list(body.additional_genes)
 
+    if body.exclude_genes:
+        excl_upper = {g.upper() for g in body.exclude_genes}
+        conflicting = [g for g in all_query_genes if g.upper() in excl_upper]
+        if conflicting:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot search for {conflicting} and exclude them simultaneously.",
+            )
+
+    # ── Multi-gene combined search — see models.classical.multi_gene_ranker.
+    # Only taken when additional_genes is non-empty; the branch below this
+    # one is the ORIGINAL single-gene code, completely untouched, so
+    # behavior for existing callers (additional_genes omitted/empty) is
+    # unchanged.
+    if body.additional_genes:
+        from src.models.classical.multi_gene_ranker import rank_multi_gene
+        from src.models.classical.similarity import find_alternatives_multi_gene
+
+        t0 = time.time()
+        combined = await asyncio.to_thread(
+            rank_multi_gene,
+            all_query_genes, body.disease_filter, body.lineage_filter,
+            body.exclude_genes or None, body.top_n,
+        )
+        if combined is None or len(combined) == 0:
+            raise HTTPException(
+                404,
+                f"No cell lines have data for all of: {', '.join(all_query_genes)}",
+            )
+
+        # Per-gene weights_used — informational only (rank_multi_gene reuses
+        # rank()'s own internal per-gene weight resolution; this mirrors
+        # what each gene's rank() call actually used, same reasoning as the
+        # single-gene path's weights_used mirroring below). Same
+        # copy_number/rwr augmentation mirror as the single-gene path
+        # (previously missing here — weights_used for multi-gene queries
+        # was silently omitting rwr/copy_number even though rank()
+        # actually applies them internally for each gene).
+        weights_used: dict = {}
+        for g in all_query_genes:
+            gw = await _get_learned_weights_for_gene(g)
+            g_class = classify_gene(g)
+            if g in AMPLIFICATION_DRIVEN_GENES and "copy_number" not in gw:
+                gw = apply_amplification_copy_number_weight(gw)
+            if "rwr" not in gw:
+                gw = apply_rwr_weight(gw, g_class)
+            weights_used[g] = gw
+
+        # combined.attrs["full_scores_by_gene"] is only provably reusable
+        # (see find_alternatives_multi_gene's docstring) when THIS call
+        # used no disease/lineage filter and no exclude_genes — same gate
+        # as the single-gene path below. Otherwise fall back to
+        # find_alternatives_multi_gene's own safe internal recompute.
+        reuse_full_scores = not (body.disease_filter or body.lineage_filter or body.exclude_genes)
+        try:
+            alts_map = await asyncio.to_thread(
+                find_alternatives_multi_gene,
+                all_query_genes, combined["cellosaurus_id"].tolist(), MASTER_MERGED, 3,
+                body.disease_filter, body.lineage_filter,
+                combined.attrs.get("full_scores_by_gene") if reuse_full_scores else None,
+            )
+        except Exception as exc:
+            print(f"[warn] multi-gene similarity: {exc}")
+            alts_map = {}
+
+        results = [
+            _build_multi_gene_result(i + 1, row, alts_map.get(row["cellosaurus_id"], []))
+            for i, (_, row) in enumerate(combined.iterrows())
+        ]
+        execution_ms = int((time.time() - t0) * 1000)
+        response = {
+            "query":   body.model_dump(),
+            "model":   "classical_multi_gene",
+            "results": results,
+            "weights_used": weights_used,
+            "metadata": {
+                "genes_queried": all_query_genes,
+                "total_candidates_per_gene": combined.attrs.get("total_candidates_per_gene", {}),
+                "n_excluded_missing_data": combined.attrs.get("n_excluded_missing_data", 0),
+                "execution_time_ms": execution_ms,
+            },
+        }
+        response = _sanitize_for_json(response)
+        response["session_id"] = _store_session(response)
+        return response
+
+    # ── Original single-gene path — UNCHANGED below this point. The
+    # exclude_genes-vs-gene conflict check above already covers this case
+    # (all_query_genes == [body.gene] when additional_genes is empty).
     t0 = time.time()
 
     # LOF genes always use the mutation-aware learned weights inside rank()
@@ -368,6 +624,23 @@ async def recommend_classical(body: ClassicalRequest):
         weights = await _get_learned_weights_for_gene(body.gene)
     else:
         weights = FIXED_WEIGHTS
+
+    # Mirror rank()'s internal weight augmentation (copy_number / rwr) here
+    # so weights_used in the response reflects what ACTUALLY produced
+    # final_score. rank() applies these same two steps to its own local
+    # `weights` binding and never returns the augmented dict (it returns a
+    # DataFrame), so without this, weights_used would silently omit
+    # copy_number/rwr even though they're in effect — see ranker.rank()'s
+    # AMPLIFICATION_DRIVEN_GENES / "rwr" not in weights block, whose exact
+    # conditions and order this replicates. Both helpers return a NEW dict
+    # (rescale-by-(1-w), never mutate their input), so this is safe to run
+    # independently on the same `weights` value passed into rank() below
+    # without risk of diverging from what rank() itself computes.
+    gene_class = classify_gene(body.gene)
+    if body.gene in AMPLIFICATION_DRIVEN_GENES and "copy_number" not in weights:
+        weights = apply_amplification_copy_number_weight(weights)
+    if "rwr" not in weights:
+        weights = apply_rwr_weight(weights, gene_class)
 
     # Run with top_n=None to capture total candidate count
     all_ranked = await asyncio.to_thread(
@@ -388,11 +661,22 @@ async def recommend_classical(body: ClassicalRequest):
 
     top_results = all_ranked.head(body.top_n)
 
+    # all_ranked is already the exact full-universe (top_n=None), no-filter*
+    # scored DataFrame find_alternatives would otherwise recompute from
+    # scratch internally — reuse it instead of paying for that a second
+    # time. *Only safe when this request itself used no disease/lineage
+    # filter and no exclude_genes: those change all_ranked's context_score
+    # / row set versus what the internal recompute (which never took
+    # filters) would have produced — see find_alternatives' docstring.
+    # Falls back to the old recompute-from-scratch path otherwise.
+    reuse_full_scores = not (body.disease_filter or body.lineage_filter or body.exclude_genes)
+
     try:
         alts_map = await asyncio.to_thread(
             find_alternatives,
             body.gene, top_results, MASTER_MERGED, 3,
             body.disease_filter, body.lineage_filter,
+            all_ranked if reuse_full_scores else None,
         )
     except Exception as exc:
         print(f"[warn] similarity: {exc}")
@@ -429,12 +713,81 @@ async def recommend_classical(body: ClassicalRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/recommend/agentic")
 async def recommend_agentic(body: AgenticRequest):
-    if body.exclude_genes and body.gene.upper() in [g.upper() for g in body.exclude_genes]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot search for {body.gene} and exclude it simultaneously.",
+    """Thin wrapper: reject fast (503) beyond _AGENTIC_MAX_CONCURRENT
+    concurrent calls, rather than let nginx's 180s proxy_read_timeout do it
+    (a raw 504, minutes later, with no explanation) — see
+    _agentic_concurrency_slot's comment. All actual logic is unchanged,
+    just moved to _recommend_agentic_impl below."""
+    async with _agentic_concurrency_slot():
+        return await _recommend_agentic_impl(body)
+
+
+async def _recommend_agentic_impl(body: AgenticRequest):
+    all_query_genes = [body.gene] + list(body.additional_genes)
+
+    if body.exclude_genes:
+        excl_upper = {g.upper() for g in body.exclude_genes}
+        conflicting = [g for g in all_query_genes if g.upper() in excl_upper]
+        if conflicting:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot search for {conflicting} and exclude them simultaneously.",
+            )
+
+    # ── Multi-gene combined justification — see models.agentic.pipeline's
+    # run_multi_gene / models.agentic.generator's
+    # generate_multi_gene_justification. Only taken when additional_genes
+    # is non-empty; the branch below this one is the ORIGINAL single-gene
+    # code, completely untouched.
+    if body.additional_genes:
+        from src.models.agentic.pipeline import run_multi_gene
+
+        t0 = time.time()
+        pipeline_out = await asyncio.to_thread(
+            run_multi_gene,
+            all_query_genes, body.disease_filter, body.lineage_filter, body.top_n,
+            body.target_cellosaurus_id, body.exclude_genes or None,
         )
 
+        # alternatives are already computed inside run_multi_gene via
+        # find_alternatives_multi_gene — used as-is here, NOT recomputed
+        # (unlike the single-gene path below, which redundantly recomputes
+        # alternatives on top of pipeline_run's own internal
+        # find_alternatives call — a separate, pre-existing inefficiency,
+        # out of this task's scope to fix).
+        results = [
+            {**r, "growth_properties": get_growth_properties(r.get("cellosaurus_id", ""))}
+            for r in pipeline_out.get("results", [])
+        ]
+
+        execution_ms = int((time.time() - t0) * 1000)
+        response = {
+            "query":   body.model_dump(),
+            "model":   "agentic_multi_gene",
+            "results": results,
+            "comparative_summary": pipeline_out.get("comparative_summary", ""),
+            "dataset_citations":   list(DATASET_CITATIONS.values()),
+            "metadata": {
+                "genes_queried": all_query_genes,
+                "execution_time_ms": execution_ms,
+                "llm_model": body.ollama_model,
+                "pubmed_papers_retrieved": sum(
+                    len(ev.get("literature", []))
+                    for r in results
+                    for ev in r.get("evidence_by_gene", {}).values()
+                ),
+            },
+        }
+        response = _sanitize_for_json(response)
+        response["session_id"] = _store_session(response)
+
+        resp = JSONResponse(content=response)
+        resp.headers["X-Processing-Time"] = str(execution_ms)
+        return resp
+
+    # ── Original single-gene path — UNCHANGED below this point. The
+    # exclude_genes-vs-gene conflict check above already covers this case
+    # (all_query_genes == [body.gene] when additional_genes is empty).
     from src.models.agentic.pipeline import run as pipeline_run
 
     t0 = time.time()
@@ -863,4 +1216,3 @@ async def cell_lines_via_pathway(
         })
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
