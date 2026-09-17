@@ -683,4 +683,3 @@ def optimise_weights_by_class(
         print(f"  loss_of_function -> {class_weights['loss_of_function']}")
 
     return class_weights
-

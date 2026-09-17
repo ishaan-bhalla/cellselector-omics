@@ -293,4 +293,3 @@ def get_cached_pathway_genes(pathway_id: str) -> list[str]:
     if pathway_id not in _PATHWAY_GENES_CACHE:
         _PATHWAY_GENES_CACHE[pathway_id] = get_genes_in_pathway(pathway_id)
     return _PATHWAY_GENES_CACHE[pathway_id]
-
